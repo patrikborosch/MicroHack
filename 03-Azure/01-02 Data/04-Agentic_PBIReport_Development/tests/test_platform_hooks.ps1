@@ -2,6 +2,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $lab = Join-Path (Split-Path -Parent $PSScriptRoot) 'labautomation'
 $script:passed = 0
+$script:diagnosticMessages = [Collections.Generic.List[string]]::new()
+function Write-Host { param([object]$Object) $script:diagnosticMessages.Add([string]$Object) }
 function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw "FAIL: $Message" }
     $script:passed++
@@ -27,6 +29,10 @@ $script:subnets = @()
 $script:deployments = @()
 $script:imageReads = 0
 $script:failDeployment = $false
+$script:throwDeployment = $false
+$script:failDiagnosticReads = $false
+$script:diagnosticReads = 0
+$script:lastBootstrap = ''
 $script:skuReads = 0
 $script:capacityStates = @('Creating','Active')
 $script:sleeps = 0
@@ -139,6 +145,12 @@ function Update-AzTag {
 }
 function New-AzResourceGroupDeployment {
     [CmdletBinding()]param($Name,$ResourceGroupName,$TemplateFile,$TemplateParameterObject,$Mode)
+    if ($TemplateParameterObject.ContainsKey('bootstrapConfigurationBase64')) {
+        $script:lastBootstrap=$TemplateParameterObject.bootstrapConfigurationBase64
+    }
+    if ($script:throwDeployment) {
+        throw [InvalidOperationException]::new("SyntheticDeploymentValidationFailure Offline-Fixture-Only-1! $($script:lastBootstrap)")
+    }
     if ($script:failDeployment) { return [pscustomobject]@{ProvisioningState='Failed'} }
     $p=$TemplateParameterObject
     $script:deployments += @{name=$Name; parameters=$p}
@@ -167,6 +179,27 @@ function New-AzResourceGroupDeployment {
         $script:resources[$diskId]=[pscustomobject]@{ResourceId=$diskId;ResourceGroupName=$ResourceGroupName;ResourceType='Microsoft.Compute/disks';Name="os-$($p.suffix)";Tags=@{};ManagedBy=$vmId}
     }
     [pscustomobject]@{ProvisioningState='Succeeded'}
+}
+function Get-AzResourceGroupDeployment {
+    [CmdletBinding()]param($Name,$ResourceGroupName)
+    $script:diagnosticReads++
+    if ($script:failDiagnosticReads) { throw 'Synthetic diagnostic read denied.' }
+    [pscustomobject]@{DeploymentName=$Name;ProvisioningState='Failed';CorrelationId='offline-correlation-id'}
+}
+function Get-AzResourceGroupDeploymentOperation {
+    [CmdletBinding()]param($DeploymentName,$ResourceGroupName)
+    $script:diagnosticReads++
+    if ($script:failDiagnosticReads) { throw 'Synthetic operation read denied.' }
+    [pscustomobject]@{
+        OperationId='offline-operation-id'
+        Properties=[pscustomobject]@{
+            ProvisioningState='Failed';StatusCode='Conflict'
+            TargetResource=[pscustomobject]@{Id="/subscriptions/$sub/resourceGroups/$ResourceGroupName/providers/Microsoft.Compute/virtualMachines/fixture";ResourceType='Microsoft.Compute/virtualMachines'}
+            StatusMessage=[pscustomobject]@{error=@{code='SyntheticVmQuotaError';message="Offline-Fixture-Only-1! $($script:lastBootstrap)"}}
+            Request='NEVER-LOG-REQUEST'
+            Response='NEVER-LOG-RESPONSE'
+        }
+    }
 }
 
 $previousConfig = [Environment]::GetEnvironmentVariable('MHH_EVENT_CONFIG')
@@ -237,6 +270,20 @@ try {
     $script:failDeployment=$true
     Assert-Throws { . "$lab\shared-deploy-lab.ps1" @sharedArgs } 'did not complete successfully'
     Assert-Throws { . "$lab\deploy-lab.ps1" @argsForUser } 'did not complete successfully'
+    $script:failDeployment=$false
+    $script:throwDeployment=$true
+    $before=$script:diagnosticMessages.Count
+    Assert-Throws { . "$lab\deploy-lab.ps1" @argsForUser } '^Participant ARM deployment failed\.'
+    $logged=($script:diagnosticMessages | Select-Object -Skip $before) -join "`n"
+    Assert-True ($script:diagnosticReads -eq 6 -and $logged -match 'offline-correlation-id' -and
+        $logged -match 'SyntheticDeploymentValidationFailure' -and $logged -match 'SyntheticVmQuotaError') 'Thrown deployment errors collect real-hook exception, correlation and ARM operation diagnostics'
+    Assert-True (-not $logged.Contains('Offline-Fixture-Only-1!') -and -not $logged.Contains($script:lastBootstrap) -and
+        $logged -notmatch 'NEVER-LOG-REQUEST|NEVER-LOG-RESPONSE') 'Real-hook diagnostics never log VM password, bootstrap payload, operation request or response'
+    $script:failDiagnosticReads=$true
+    $before=$script:diagnosticMessages.Count
+    Assert-Throws { . "$lab\deploy-lab.ps1" @argsForUser } '^Participant ARM deployment failed\.'
+    $logged=($script:diagnosticMessages | Select-Object -Skip $before) -join "`n"
+    Assert-True ($logged -match 'metadata unavailable' -and $logged -match 'operation inspection failed') 'Unavailable read-only diagnostics are explicit and preserve the original failure'
     Write-Output "PASS: $script:passed offline full-hook assertions. No cloud requests, installations or host changes."
 } finally {
     foreach ($message in $script:httpResponses) { $message.Dispose() }

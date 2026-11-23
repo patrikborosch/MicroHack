@@ -158,14 +158,110 @@ function Get-LabGuestConfiguration {
     }
 }
 
+function ConvertTo-LabDiagnosticText {
+    param([AllowEmptyString()][string]$Text, [object[]]$SensitiveValues = @())
+    foreach ($value in $SensitiveValues) {
+        $plain = if ($value -is [securestring]) { [pscredential]::new('redact', $value).GetNetworkCredential().Password } else { [string]$value }
+        if ($plain) {
+            $Text = $Text.Replace($plain, '[REDACTED]')
+            $escaped = ConvertTo-Json -InputObject $plain -Compress
+            $Text = $Text.Replace($escaped.Substring(1, $escaped.Length - 2), '[REDACTED]')
+            $Text = $Text.Replace([uri]::EscapeDataString($plain), '[REDACTED]')
+        }
+        $plain = $null
+    }
+    $Text = [regex]::Replace($Text, '(?i)\bBearer\s+[^\s"''<>]+', 'Bearer [REDACTED]')
+    $Text = [regex]::Replace($Text, '\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b', '[REDACTED_TOKEN]')
+    $Text = [regex]::Replace($Text, '(?i)(["'']?(?:\w*password|\w*secret|access_token|refresh_token|token|authorization|api_?key|accountKey|sharedAccessKey|sasToken|sig|ConfigurationBase64|bootstrapConfigurationBase64)["'']?\s*[:=]\s*)("(?:\\.|[^"\\])*"|''(?:\\.|[^''\\])*''|[^\s,;}]+)', '$1[REDACTED]')
+    $Text = [regex]::Replace($Text, '(?i)(https?://[^\s"''<>?]+)\?[^\s"''<>]+', '$1?[REDACTED_QUERY]')
+    $Text = [regex]::Replace($Text, '[A-Za-z0-9+/=_-]{512,}', '[REDACTED_PAYLOAD]')
+    $Text = [regex]::Replace($Text, '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '')
+    $Text = $Text.Replace("`r", '').Replace("`n", ' | ')
+    if ($Text.Length -gt 3000) { $Text = $Text.Substring(0, 3000) + ' [TRUNCATED]' }
+    return $Text
+}
+
+function Write-LabExceptionDiagnostic {
+    param([Management.Automation.ErrorRecord]$Record, [object[]]$SensitiveValues = @())
+    Write-Host ('[lab:error] ErrorId: ' + (ConvertTo-LabDiagnosticText $Record.FullyQualifiedErrorId $SensitiveValues))
+    $exception = $Record.Exception
+    for ($depth = 0; $exception -and $depth -lt 8; $depth++) {
+        Write-Host ("[lab:error] Exception[$depth] $($exception.GetType().FullName): " +
+            (ConvertTo-LabDiagnosticText $exception.Message $SensitiveValues))
+        $exception = $exception.InnerException
+    }
+    if ($Record.ErrorDetails) {
+        Write-Host ('[lab:error] Details: ' + (ConvertTo-LabDiagnosticText $Record.ErrorDetails.Message $SensitiveValues))
+    }
+    if ($Record.InvocationInfo) {
+        Write-Host ("[lab:error] Source: $([IO.Path]::GetFileName($Record.InvocationInfo.ScriptName)):$($Record.InvocationInfo.ScriptLineNumber)")
+    }
+}
+
+function Write-LabDeploymentDiagnostics {
+    param([string]$ResourceGroupName, [string]$DeploymentName, [object[]]$SensitiveValues = @())
+    Write-Host "[lab:diagnostic] Inspecting deployment $DeploymentName in $ResourceGroupName (read-only)."
+    try {
+        $deployment = Invoke-LabAzureOperation {
+            Get-AzResourceGroupDeployment -ResourceGroupName $ResourceGroupName -Name $DeploymentName -ErrorAction Stop
+        } 'Read failed deployment metadata' -SensitiveValues $SensitiveValues
+        foreach ($name in 'DeploymentName', 'ProvisioningState', 'CorrelationId', 'Timestamp') {
+            $property = $deployment.PSObject.Properties[$name]
+            if ($property -and $null -ne $property.Value) {
+                Write-Host ("[lab:diagnostic] ${name}: " + (ConvertTo-LabDiagnosticText ([string]$property.Value) $SensitiveValues))
+            }
+        }
+    } catch {
+        Write-Host '[lab:diagnostic] Deployment metadata unavailable; validation or a local client failure may have occurred before ARM recorded the deployment. Original failure retained.'
+    }
+    try {
+        $operations = @(Invoke-LabAzureOperation {
+            Get-AzResourceGroupDeploymentOperation -ResourceGroupName $ResourceGroupName -DeploymentName $DeploymentName -ErrorAction Stop
+        } 'Read failed deployment operations' -SensitiveValues $SensitiveValues)
+        if ($operations.Count -eq 0) { Write-Host '[lab:diagnostic] ARM returned no recorded deployment operations.' }
+        foreach ($operation in @($operations | Select-Object -Last 30)) {
+            $properties = if ($operation.PSObject.Properties['Properties']) { $operation.Properties } else { $operation }
+            foreach ($name in 'OperationId', 'ProvisioningOperation', 'ProvisioningState', 'StatusCode', 'Timestamp', 'ServiceRequestId') {
+                $property = $properties.PSObject.Properties[$name]
+                if (-not $property) { $property = $operation.PSObject.Properties[$name] }
+                if ($property -and $null -ne $property.Value) {
+                    Write-Host ("[lab:operation] ${name}: " + (ConvertTo-LabDiagnosticText ([string]$property.Value) $SensitiveValues))
+                }
+            }
+            $target = $properties.PSObject.Properties['TargetResource']
+            if ($target -and $target.Value) {
+                foreach ($name in 'Id', 'ResourceType') {
+                    $property = $target.Value.PSObject.Properties[$name]
+                    if ($property) {
+                        Write-Host ("[lab:operation] Target ${name}: " + (ConvertTo-LabDiagnosticText ([string]$property.Value) $SensitiveValues))
+                    }
+                }
+            }
+            $status = $properties.PSObject.Properties['StatusMessage']
+            if ($status -and $null -ne $status.Value) {
+                $text = if ($status.Value -is [string]) { $status.Value } else { ConvertTo-Json -InputObject $status.Value -Depth 10 -Compress }
+                Write-Host ('[lab:operation] StatusMessage: ' + (ConvertTo-LabDiagnosticText $text $SensitiveValues))
+            }
+        }
+    } catch {
+        Write-Host '[lab:diagnostic] Deployment operation inspection failed; original deployment failure retained.'
+    }
+}
+
 function Invoke-LabAzureOperation {
-    param([scriptblock]$Operation, [string]$Description)
-    # Never rethrow provider bodies: deployment failures can echo protected parameters.
+    param([scriptblock]$Operation, [string]$Description, [object[]]$SensitiveValues = @())
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    Write-Host "[lab] $([DateTimeOffset]::UtcNow.ToString('o')) START $Description"
     try {
         if (Get-Command Update-MhhToken -ErrorAction SilentlyContinue) { Update-MhhToken | Out-Null }
         & $Operation 3>$null 4>$null 5>$null 6>$null
+        Write-Host "[lab] DONE $Description ($([Math]::Round($timer.Elapsed.TotalSeconds, 1))s)"
     }
-    catch { throw [InvalidOperationException]::new("$Description failed. Inspect Azure operation status privately; provider response suppressed.") }
+    catch {
+        Write-Host "[lab:error] FAILED $Description ($([Math]::Round($timer.Elapsed.TotalSeconds, 1))s)"
+        Write-LabExceptionDiagnostic $_ -SensitiveValues $SensitiveValues
+        throw [InvalidOperationException]::new("$Description failed. See redacted [lab:error] and [lab:diagnostic] entries above.")
+    }
 }
 
 function Assert-LabResourceGroup {
@@ -269,6 +365,7 @@ function Invoke-LabArmRequest {
         if ($timer.Elapsed.TotalSeconds -ge $TimeoutSeconds) { throw 'ARM operation timed out; inspect status before rerunning.' }
         $response = Invoke-LabAzureOperation { Invoke-AzRestMethod -Method $Method -Path $pathToPoll -ErrorAction Stop } 'ARM request'
         $status = [int]$response.StatusCode
+        Write-Host ("[lab:arm] $Method " + (ConvertTo-LabDiagnosticText ($pathToPoll.Split('?')[0])) + "; HTTP $status; attempt=$($attempt + 1)")
         if ($status -notin 200, 201, 202, 204, 429, 503) { throw "ARM HTTP $status; no success fallback." }
         $body = $null
         if ($response.Content) {

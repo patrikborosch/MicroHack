@@ -7,6 +7,8 @@ $lab = Join-Path $hack 'labautomation'
 . (Join-Path $lab 'automation-common.ps1')
 . (Join-Path $lab 'bootstrap.ps1') -ConfigurationBase64 'e30='
 $script:passed = 0
+$script:diagnosticMessages = [Collections.Generic.List[string]]::new()
+function Write-Host { param([object]$Object) $script:diagnosticMessages.Add([string]$Object) }
 $script:httpResponses = [Collections.Generic.List[Net.Http.HttpResponseMessage]]::new()
 function New-TestHttpHeaders($Values = @{}) {
     $message = [Net.Http.HttpResponseMessage]::new()
@@ -124,7 +126,24 @@ try {
     Assert-Throws { Invoke-LabArmRequest -Path "/subscriptions/$sub/resources?api-version=1" } 'deadline'
     Add-Response 200 '{"status":"Running"}' @{}
     Assert-Throws { Invoke-LabArmRequest -Path "/subscriptions/$sub/resources?api-version=1" -MaxRequests 1 } 'request limit'
-    Assert-Throws { Invoke-LabAzureOperation { throw 'SECRET' } 'Synthetic operation' } '^Synthetic operation failed\.'
+    $before=$script:diagnosticMessages.Count
+    $privatePassword='Synthetic-Fixture-Only-1!'
+    $privatePayload=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('Synthetic protected bootstrap fixture'))
+    $secret=ConvertTo-SecureString $privatePassword -AsPlainText -Force
+    $exception=[InvalidOperationException]::new("InvalidTemplate: $privatePassword $privatePayload",
+        [ArgumentException]::new('VmSizeUnavailable: choose a supported VM size.'))
+    $record=[Management.Automation.ErrorRecord]::new($exception,'SyntheticDeploymentError',
+        [Management.Automation.ErrorCategory]::InvalidArgument,$null)
+    $record.ErrorDetails=[Management.Automation.ErrorDetails]::new('{"error":{"code":"SyntheticQuotaError","message":"Check regional cores","password":"unregistered-sensitive-field","url":"https://example.test/x?sig=private-query"}}')
+    Assert-Throws { Invoke-LabAzureOperation { throw $record } 'Synthetic operation' -SensitiveValues @($secret,$privatePayload) } '^Synthetic operation failed\.'
+    $logged=($script:diagnosticMessages | Select-Object -Skip $before) -join "`n"
+    Assert-True ($logged -match 'InvalidTemplate' -and $logged -match 'VmSizeUnavailable' -and $logged -match 'SyntheticQuotaError') 'Diagnostics retain outer/inner causes and provider error details'
+    Assert-True (-not $logged.Contains($privatePassword) -and -not $logged.Contains($privatePayload) -and
+        $logged -notmatch 'unregistered-sensitive-field|private-query') 'Exception diagnostics redact SecureString, protected payload, secret fields and URL queries'
+    $secret.Dispose()
+    $token='eyJ'+('a'*20)+'.'+('b'*20)+'.'+('c'*20)
+    $redacted=ConvertTo-LabDiagnosticText "Bearer opaque-fixture-token token=$token"
+    Assert-True ($redacted -notmatch 'opaque-fixture-token' -and -not $redacted.Contains($token)) 'Bearer and JWT diagnostics are redacted'
     $script:resources=@()
     $script:groupTags=@{}
     $script:claimed=$false

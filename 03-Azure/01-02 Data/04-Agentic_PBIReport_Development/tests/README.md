@@ -41,6 +41,10 @@ complete before metadata/deployment. Already-registering, timeout and
 permission-denied cases are also covered. ARM doubles return real .NET
 `HttpResponseHeaders`, not just hashtables. No Azure call, authentication,
 installation or machine configuration occurs.
+Thrown and returned deployment failures exercise exception diagnostics,
+read-only correlation/operation collection and unavailable diagnostic reads.
+Captured logs must retain the synthetic failure codes while excluding the
+fixture VM password, complete bootstrap payload and operation request/response.
 
 `test_automation.ps1` checks runtime settings/pins, schemas and signatures,
 ownership/implicit disks, ARM polling/failure paths and real temporary ZIP
@@ -50,6 +54,8 @@ and ambiguous-header rejection, while retaining dictionary compatibility.
 Its selective-downloader double stages the actual 25 allowlisted
 source files from the pinned Git blobs in OS temp and verifies CSV bytes/checksums
 and dictionary links. It checks canonical guest JSON and repeat skill-tree copying.
+Diagnostic fixtures also verify inner exception/error-detail visibility and
+SecureString, payload, credential-field, URL-query and bearer/JWT redaction.
 It does not install Windows tools, run the guest bootstrap, perform interactive
 first-login initialization, test MCP connectivity or certify a live tenant.
 

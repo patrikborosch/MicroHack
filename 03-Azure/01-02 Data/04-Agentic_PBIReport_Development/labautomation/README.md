@@ -175,6 +175,30 @@ transcripts/debugging around credential output or serialize parameter objects.
 Guest failures retain a timestamp and error message in
 `C:\MicroHack\bootstrap-error.txt` for private VM-side diagnosis.
 
+Detailed hook diagnostics are enabled by default:
+
+- `[lab]` records each Azure call's start, completion/failure and elapsed time,
+  plus the deployment name, region, VM size and resolved image version.
+- `[lab:arm]` records request paths without query values, HTTP status and attempts.
+- `[lab:error]` records the error ID, exception types/messages, up to eight inner
+  exceptions, provider error details and source filename/line. Local client,
+  template compilation and validation failures are therefore visible even if
+  ARM never records a deployment.
+- `[lab:diagnostic]` and `[lab:operation]` attempt read-only deployment metadata
+  and operation inspection after either a thrown deployment error or a failed
+  result. They include correlation/request IDs, target resource IDs/types,
+  states and status messages for up to 30 operations.
+
+The collector does not redeploy, run guest commands or change resources. Missing
+deployment records or denied diagnostic reads are logged without replacing the
+original failure. Known VM passwords (including escaped forms), bootstrap
+payloads, bearer/JWT tokens, credential fields and URL queries are redacted;
+messages are capped at 3000 characters. Entire exception objects, request/response
+objects, parameter objects and Az debug/verbose streams are not dumped.
+Logs still contain infrastructure IDs and should be handled as organizer
+diagnostic material. This instrumentation improves evidence; it does not prove
+the cause of a previously suppressed error or fix an unidentified Azure failure.
+
 The platform invokes shared first, waits, then invokes participant hooks. No
 launcher environment customization is needed. The [offline tests](../tests/README.md)
 invoke both full scripts with provider-boundary doubles, no private config,

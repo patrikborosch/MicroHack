@@ -11,6 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'automation-common.ps1')
+Write-Host "[lab] Shared preflight: subscription=$SubscriptionId; participants=$($AllowedEntraUserIds.Count)"
 $runtime = Get-LabPlatformContext $SubscriptionId $PreferredLocation $AllowedEntraUserIds
 $settings = $runtime.Settings
 if (-not (Get-Command Get-MhhStableHash -ErrorAction SilentlyContinue)) { throw 'Required platform helper unavailable: Get-MhhStableHash' }
@@ -44,24 +45,33 @@ $allCapacities = @(Invoke-LabAzureOperation { Get-AzResource -ResourceType 'Micr
 if (@($allCapacities | Where-Object { $_.Name -eq $capacityName -and $_.ResourceGroupName -ne $resourceGroup }).Count -gt 0) {
     throw 'The lab capacity name already exists outside its owned resource group; refusing adoption.'
 }
-$deployment = Invoke-LabAzureOperation {
-    New-AzResourceGroupDeployment -Name 'apbi-shared' -ResourceGroupName $resourceGroup `
-        -TemplateFile (Join-Path $PSScriptRoot 'shared.bicep') -TemplateParameterObject @{
-            location = $region; capacityName = $capacityName; suffix = $suffix
-            capacityAdministrators = @($administrator); tags = $tags
-            participantSubnets = @(
-                for ($i = 0; $i -lt $users.Count; $i++) {
-                    $block = $i + 1
-                    @{
-                        name = 'participant-' + (Get-MhhStableHash -Value @($users[$i]) -Length 12)
-                        prefix = "10.90.$([int][Math]::Floor($block / 4)).$(($block % 4) * 64)/26"
+Write-Host "[lab] Shared template: shared.bicep; deployment=apbi-shared; region=$region; imageVersion=$($image.version); participants=$($users.Count)"
+try {
+    $deployment = Invoke-LabAzureOperation {
+        New-AzResourceGroupDeployment -Name 'apbi-shared' -ResourceGroupName $resourceGroup `
+            -TemplateFile (Join-Path $PSScriptRoot 'shared.bicep') -TemplateParameterObject @{
+                location = $region; capacityName = $capacityName; suffix = $suffix
+                capacityAdministrators = @($administrator); tags = $tags
+                participantSubnets = @(
+                    for ($i = 0; $i -lt $users.Count; $i++) {
+                        $block = $i + 1
+                        @{
+                            name = 'participant-' + (Get-MhhStableHash -Value @($users[$i]) -Length 12)
+                            prefix = "10.90.$([int][Math]::Floor($block / 4)).$(($block % 4) * 64)/26"
+                        }
                     }
-                }
-            )
-            bastionScaleUnits = $settings.BastionScaleUnits
-        } -Mode Incremental -ErrorAction Stop -Verbose:$false -Debug:$false
-} 'Shared F16 ARM deployment'
-if ($deployment.ProvisioningState -ne 'Succeeded') { throw 'Shared F16 ARM deployment did not complete successfully.' }
+                )
+                bastionScaleUnits = $settings.BastionScaleUnits
+            } -Mode Incremental -ErrorAction Stop -Verbose:$false -Debug:$false
+    } 'Shared F16 ARM deployment'
+} catch {
+    Write-LabDeploymentDiagnostics $resourceGroup 'apbi-shared'
+    throw
+}
+if ($deployment.ProvisioningState -ne 'Succeeded') {
+    Write-LabDeploymentDiagnostics $resourceGroup 'apbi-shared'
+    throw 'Shared F16 ARM deployment did not complete successfully.'
+}
 $active = $false
 $deadline = [DateTimeOffset]::UtcNow.AddMinutes(5)
 for ($attempt = 0; $attempt -lt 60; $attempt++) {

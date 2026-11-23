@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'automation-common.ps1')
+Write-Host "[lab] Participant preflight: subscription=$SubscriptionId; resourceGroup=$ResourceGroupName; deploymentType=$DeploymentType"
 if ($DeploymentType -ne 'resourcegroup') { throw 'Only the resourcegroup platform contract is supported; subscription-owner delivery is not approved.' }
 $runtime = Get-LabPlatformContext $SubscriptionId $PreferredLocation $AllowedEntraUserIds
 $settings = $runtime.Settings
@@ -65,12 +66,23 @@ $parameters = @{
     bootstrapConfigurationBase64 = $encodedBootstrap
     bootstrapRunId = [DateTimeOffset]::UtcNow.ToString('o')
 }
-$deployment = Invoke-LabAzureOperation {
-    New-AzResourceGroupDeployment -Name "apbi-$suffix" -ResourceGroupName $ResourceGroupName `
-        -TemplateFile (Join-Path $PSScriptRoot 'main.bicep') -TemplateParameterObject $parameters `
-        -Mode Incremental -ErrorAction Stop -Verbose:$false -Debug:$false
-} 'Participant ARM deployment (inspect sanitized operation status privately on failure)'
-if ($deployment.ProvisioningState -ne 'Succeeded') { throw 'Participant ARM deployment did not complete successfully.' }
+$deploymentName = "apbi-$suffix"
+$sensitiveValues = @($securePassword, $encodedBootstrap)
+Write-Host "[lab] Participant template: main.bicep; deployment=$deploymentName; region=$region; vmSize=$($settings.VmSize); imageVersion=$($image.version); bootstrapCharacters=$($encodedBootstrap.Length)"
+try {
+    $deployment = Invoke-LabAzureOperation {
+        New-AzResourceGroupDeployment -Name $deploymentName -ResourceGroupName $ResourceGroupName `
+            -TemplateFile (Join-Path $PSScriptRoot 'main.bicep') -TemplateParameterObject $parameters `
+            -Mode Incremental -ErrorAction Stop -Verbose:$false -Debug:$false
+    } 'Participant ARM deployment' -SensitiveValues $sensitiveValues
+} catch {
+    Write-LabDeploymentDiagnostics $ResourceGroupName $deploymentName -SensitiveValues $sensitiveValues
+    throw
+}
+if ($deployment.ProvisioningState -ne 'Succeeded') {
+    Write-LabDeploymentDiagnostics $ResourceGroupName $deploymentName -SensitiveValues $sensitiveValues
+    throw 'Participant ARM deployment did not complete successfully.'
+}
 # Azure creates the OS disk implicitly; stamp it only after verifying its owning VM.
 Assert-LabResourceGroup -Name $ResourceGroupName -Location $region -Tags $tags `
     -ImplicitVmId "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Compute/virtualMachines/vm-$suffix"
