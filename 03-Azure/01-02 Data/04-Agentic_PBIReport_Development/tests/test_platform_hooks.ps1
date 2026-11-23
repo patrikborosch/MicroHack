@@ -4,6 +4,16 @@ $lab = Join-Path (Split-Path -Parent $PSScriptRoot) 'labautomation'
 $script:passed = 0
 $script:diagnosticMessages = [Collections.Generic.List[string]]::new()
 function Write-Host { param([object]$Object) $script:diagnosticMessages.Add([string]$Object) }
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections;
+using System.Security;
+public static class MicroHackAzSecureParameterContract {
+    public static bool IsNativeSecureString(Hashtable parameters, string name) {
+        return parameters[name] is SecureString;
+    }
+}
+'@
 function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw "FAIL: $Message" }
     $script:passed++
@@ -146,7 +156,9 @@ function Update-AzTag {
 function New-AzResourceGroupDeployment {
     [CmdletBinding()]param($Name,$ResourceGroupName,$TemplateFile,$TemplateParameterObject,$Mode)
     if ($TemplateParameterObject.ContainsKey('bootstrapConfigurationBase64')) {
-        $script:lastBootstrap=$TemplateParameterObject.bootstrapConfigurationBase64
+        Assert-True ([MicroHackAzSecureParameterContract]::IsNativeSecureString($TemplateParameterObject, 'adminPassword')) 'Az converter receives a native CLR SecureString password, not a PSObject wrapper'
+        Assert-True ([MicroHackAzSecureParameterContract]::IsNativeSecureString($TemplateParameterObject, 'bootstrapConfigurationBase64')) 'Az converter receives a native CLR SecureString bootstrap parameter'
+        $script:lastBootstrap=[pscredential]::new('fixture', $TemplateParameterObject.bootstrapConfigurationBase64).GetNetworkCredential().Password
     }
     if ($script:throwDeployment) {
         throw [InvalidOperationException]::new("SyntheticDeploymentValidationFailure Offline-Fixture-Only-1! $($script:lastBootstrap)")
@@ -170,9 +182,9 @@ function New-AzResourceGroupDeployment {
         Assert-True ($p.adminPassword -is [securestring]) 'VM password passed as SecureString'
         Assert-True ($p.image.version -eq '20348.100.2') 'Exact shared-resolved image passed to participant'
         Assert-True ($p.subnetId -in $script:subnets) 'Participant NIC uses a shared-provisioned subnet'
-        $guest=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p.bootstrapConfigurationBase64)) | ConvertFrom-Json
+        $guest=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($script:lastBootstrap)) | ConvertFrom-Json
         Assert-True ($guest.source.files.Count -eq 25 -and $guest.tools.Count -eq 7) 'Complete guest payload built without event file'
-        Assert-True ($p.bootstrapConfigurationBase64.Length -gt 7000) 'Managed Run Command supports the real payload instead of a command-line limit'
+        Assert-True ($script:lastBootstrap.Length -gt 7000) 'Managed Run Command supports the real payload instead of a command-line limit'
         $vmId="$prefix/Microsoft.Compute/virtualMachines/vm-$($p.suffix)"
         $script:resources[$vmId]=[pscustomobject]@{ResourceId=$vmId;ResourceGroupName=$ResourceGroupName;ResourceType='Microsoft.Compute/virtualMachines';Name="vm-$($p.suffix)";Tags=$p.tags}
         $diskId="$prefix/Microsoft.Compute/disks/os-$($p.suffix)"
@@ -205,6 +217,10 @@ function Get-AzResourceGroupDeploymentOperation {
 $previousConfig = [Environment]::GetEnvironmentVariable('MHH_EVENT_CONFIG')
 try {
     [Environment]::SetEnvironmentVariable('MHH_EVENT_CONFIG', $null)
+    $wrappedPassword=New-MhhStablePassword -Purpose 'fixture' -Length 24 -AsSecureString
+    Assert-True ($wrappedPassword -is [securestring] -and
+        -not [MicroHackAzSecureParameterContract]::IsNativeSecureString(@{value=$wrappedPassword}, 'value')) 'Fixture reproduces PowerShell -is masking the CLR SecureString wrapper'
+    $wrappedPassword.Dispose()
     $defaults=Get-Content -LiteralPath "$lab\lab-defaults.json" -Raw | ConvertFrom-Json
     $sharedArgs=@{SubscriptionId=$sub;PreferredLocation=@('unsupportedregion',$defaults.preferredLocation);AllowedEntraUserIds=@($user2,$user)}
     $sharedOutput = @(. "$lab\shared-deploy-lab.ps1" @sharedArgs)

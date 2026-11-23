@@ -53,17 +53,19 @@ Assert-LabResourceGroup -Name $ResourceGroupName -Location $region -Tags $tags -
 $securePassword = New-MhhStablePassword -Purpose 'apbi-vm-admin' -Length 24 -AsSecureString
 if ($securePassword -isnot [securestring]) { throw 'Platform password helper did not return a SecureString.' }
 $encodedBootstrap = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((ConvertTo-LabCanonicalJson $bootstrapConfig)))
+$secureBootstrap = ConvertTo-SecureString $encodedBootstrap -AsPlainText -Force
+# Az's C# parameter converter does not unwrap PowerShell's PSObject-wrapped SecureString.
 $parameters = @{
     location = $region
     suffix = $suffix
     tags = $tags
     adminUsername = "lab$suffix"
-    adminPassword = $securePassword
+    adminPassword = $securePassword.PSObject.BaseObject
     vmSize = $settings.VmSize
     image = $image
     osDiskSizeGB = $settings.OsDiskSizeGB
     subnetId = $subnetId
-    bootstrapConfigurationBase64 = $encodedBootstrap
+    bootstrapConfigurationBase64 = $secureBootstrap.PSObject.BaseObject
     bootstrapRunId = [DateTimeOffset]::UtcNow.ToString('o')
 }
 $deploymentName = "apbi-$suffix"
@@ -78,6 +80,8 @@ try {
 } catch {
     Write-LabDeploymentDiagnostics $ResourceGroupName $deploymentName -SensitiveValues $sensitiveValues
     throw
+} finally {
+    $secureBootstrap.Dispose()
 }
 if ($deployment.ProvisioningState -ne 'Succeeded') {
     Write-LabDeploymentDiagnostics $ResourceGroupName $deploymentName -SensitiveValues $sensitiveValues

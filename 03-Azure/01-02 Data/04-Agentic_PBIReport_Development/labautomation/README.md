@@ -82,6 +82,11 @@ no separately hosted bootstrap URL, source ZIP, seven-kilobyte shell argument or
 requirement for custom portable bundles. Run Command waits for completion and
 treats script failure as ARM deployment failure. Its configuration uses protected
 parameters; it carries no participant/cloud authentication secrets.
+Both Bicep secure-string inputs (VM password and bootstrap configuration) are
+passed as native CLR `SecureString` values in `TemplateParameterObject`.
+Their `PSObject` wrappers must be removed: PowerShell's `-is [securestring]`
+alone accepts the wrapper, but Az's C# conversion can miss it and fail locally
+with `Unable to serialize secure string value`, before any ARM deployment exists.
 
 [student-files.json](student-files.json) lists 25 exact source files and hashes:
 both sets of eight CSVs, manifest, dictionary, generator/module and five shared

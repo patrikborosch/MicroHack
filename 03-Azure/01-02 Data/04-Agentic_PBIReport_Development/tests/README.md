@@ -45,6 +45,11 @@ Thrown and returned deployment failures exercise exception diagnostics,
 read-only correlation/operation collection and unavailable diagnostic reads.
 Captured logs must retain the synthetic failure codes while excluding the
 fixture VM password, complete bootstrap payload and operation request/response.
+Secure parameter checks run in C# against the actual hashtable values, as Az's
+converter does. A wrapped fixture demonstrates why PowerShell's `-is` check
+alone misses this serialization failure; both Bicep secure-string parameters
+must reach the cmdlet as native CLR `SecureString` values. Fixtures decode the
+bootstrap only privately to inspect its contents and redaction behavior.
 
 `test_automation.ps1` checks runtime settings/pins, schemas and signatures,
 ownership/implicit disks, ARM polling/failure paths and real temporary ZIP
