@@ -30,6 +30,30 @@ try {
     $warning = Invoke-LabProfileCommand $nativeShell @('-NoProfile','-Command',"[Console]::Error.WriteLine('synthetic benign warning'); exit 0")
     Assert-True ($warning -match 'synthetic benign warning') 'Successful native stderr is captured without a false deployment failure in Windows PowerShell'
     Assert-Throws { Invoke-LabProfileCommand $nativeShell @('-NoProfile','-Command','exit 7') } 'Lab setup command failed'
+    $node = (Get-Command node.exe -CommandType Application -ErrorAction Stop).Source
+    $lockPath = Join-Path $scratch 'package-lock.json'
+    $lockFixture = @'
+{"lockfileVersion":3,"packages":{"":{"name":"microhack-runtime","version":"1.0.0"},"node_modules/@microsoft/powerbi-report-authoring-cli":{"version":"1.3.0","resolved":"https://example.test/report.tgz","integrity":"sha512-fixture"},"node_modules/dependency":{"version":"2.0.0","resolved":"https://example.test/dependency.tgz","integrity":"sha512-fixture"}}}
+'@
+    [IO.File]::WriteAllText($lockPath, $lockFixture, [Text.UTF8Encoding]::new($false))
+    Assert-LabReportLock $lockPath '1.3.0' $node
+    Assert-True $true 'Actual bootstrap lock validation accepts the npm empty root key in Windows PowerShell 5.1'
+    $reference = Get-Content -LiteralPath "$lab\npm-runtime\package.json" -Raw | ConvertFrom-Json
+    Assert-LabReportLock "$lab\npm-runtime\package-lock.json" $reference.dependencies.'@microsoft/powerbi-report-authoring-cli' $node
+    Assert-True $true 'The actual checked-in npm lock passes the same bootstrap validator'
+    Assert-Throws { Assert-LabReportLock $lockPath '9.0.0' $node } 'conflicts with the provisioning snapshot'
+    foreach ($invalid in @(
+        $lockFixture.Replace('sha512-fixture', 'sha1-fixture'),
+        $lockFixture.Replace('https://example.test/dependency.tgz', 'http://example.test/dependency.tgz'),
+        $lockFixture.Replace(',"integrity":"sha512-fixture"', '')
+    )) {
+        [IO.File]::WriteAllText($lockPath, $invalid, [Text.UTF8Encoding]::new($false))
+        Assert-Throws { Assert-LabReportLock $lockPath '1.3.0' $node } 'lacks HTTPS/SHA512 integrity'
+    }
+    [IO.File]::WriteAllText($lockPath, '{"packages":{"":{}}}', [Text.UTF8Encoding]::new($false))
+    Assert-Throws { Assert-LabReportLock $lockPath '1.3.0' $node } 'conflicts with the provisioning snapshot'
+    [IO.File]::WriteAllText($lockPath, '{invalid', [Text.UTF8Encoding]::new($false))
+    Assert-Throws { Assert-LabReportLock $lockPath '1.3.0' $node } 'Lab setup command failed'
     if ($Live) {
         $latest = Get-LabLatestPackages
         Assert-True ($latest.tools.Count -eq 7) 'All seven tools resolve from current official metadata'
@@ -88,6 +112,8 @@ try {
         $npmOptions = @('--ignore-scripts','--no-audit','--no-fund',"--prefix=$runtime",
             "--registry=$($latest.report.registry)","--cache=$scratch\npm-cache","--userconfig=$scratch\empty.npmrc")
         $null = Invoke-LabProfileCommand $npm (@('install','--package-lock-only') + $npmOptions)
+        Assert-LabReportLock "$runtime\package-lock.json" $latest.report.version $node
+        Assert-True $true 'Actual bootstrap validation accepts the newly generated npm lock without skipping version or dependency integrity checks'
         $null = Invoke-LabProfileCommand $npm (@('ci') + $npmOptions)
         $runtimeVersion = Invoke-LabProfileCommand "$runtime\node_modules\.bin\powerbi-report-author.cmd" @('--version')
         Assert-True ($runtimeVersion -match [regex]::Escape($latest.report.version)) 'Latest frozen report runtime installs without lifecycle scripts and starts'

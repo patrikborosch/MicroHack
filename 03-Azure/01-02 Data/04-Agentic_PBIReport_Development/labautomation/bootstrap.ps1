@@ -231,16 +231,7 @@ deleting participant VMs or pausing F16 does not remove these shared resources.
         $null = Invoke-LabProfileCommand $npm @('install', '--prefix', $reportRoot, '--package-lock-only',
             '--ignore-scripts', '--no-audit', '--no-fund', "--registry=$($packages.report.registry)")
     }
-    $reportLock = Get-Content -LiteralPath "$reportRoot\package-lock.json" -Raw | ConvertFrom-Json
-    if ($reportLock.packages.'node_modules/@microsoft/powerbi-report-authoring-cli'.version -ne $packages.report.version) {
-        throw 'Report runtime lock conflicts with the provisioning snapshot.'
-    }
-    foreach ($entry in $reportLock.packages.PSObject.Properties) {
-        if ($entry.Name -and (-not $entry.Value.PSObject.Properties['integrity'] -or $entry.Value.integrity -notmatch '^sha512-' -or
-            -not $entry.Value.PSObject.Properties['resolved'] -or $entry.Value.resolved -notmatch '^https://')) {
-            throw 'Report runtime dependency lacks HTTPS/SHA512 integrity.'
-        }
-    }
+    Assert-LabReportLock "$reportRoot\package-lock.json" $packages.report.version $node
     $null = Invoke-LabProfileCommand $npm @('ci', '--prefix', $reportRoot,
         '--ignore-scripts', '--no-audit', '--no-fund', "--registry=$($packages.report.registry)")
     $null = Invoke-LabProfileCommand "$reportRoot\node_modules\.bin\powerbi-report-author.cmd" @('--version')
@@ -368,13 +359,44 @@ function Get-LabToolPath {
     return $Tool.executable
 }
 
+function Assert-LabReportLock {
+    param([string]$Path, [string]$ExpectedVersion, [string]$NodeExecutable)
+    # npm's root package has an empty JSON key, which ConvertFrom-Json rejects in Windows PowerShell 5.1.
+    $readEntries = @'
+const fs = require('node:fs');
+const lock = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+if (!lock.packages || typeof lock.packages !== 'object' || Array.isArray(lock.packages)) {
+    throw new Error('Report runtime lock has no package dictionary.');
+}
+const entries = Object.entries(lock.packages).filter(([name]) => name !== '').map(([name, pkg]) => ({
+    name,
+    version: pkg.version ?? null,
+    integrity: pkg.integrity ?? null,
+    resolved: pkg.resolved ?? null
+}));
+process.stdout.write(JSON.stringify(entries));
+'@
+    $entries = Invoke-LabProfileCommand $NodeExecutable @('-e', $readEntries, $Path) | ConvertFrom-Json
+    $entries = @($entries)
+    $report = @($entries | Where-Object name -EQ 'node_modules/@microsoft/powerbi-report-authoring-cli')
+    if ($report.Count -ne 1 -or $report[0].version -ne $ExpectedVersion) {
+        throw 'Report runtime lock conflicts with the provisioning snapshot.'
+    }
+    foreach ($entry in $entries) {
+        if ($entry.integrity -notmatch '^sha512-' -or $entry.resolved -notmatch '^https://') {
+            throw 'Report runtime dependency lacks HTTPS/SHA512 integrity.'
+        }
+    }
+}
+
 # Dot-sourcing permits offline helper tests without modifying the host.
 if ($MyInvocation.InvocationName -ne '.') {
     try { Invoke-LabBootstrap $ConfigurationBase64 }
     catch {
         [IO.Directory]::CreateDirectory('C:\MicroHack') | Out-Null
         [IO.File]::WriteAllText('C:\MicroHack\bootstrap-error.txt',
-            [DateTimeOffset]::UtcNow.ToString('o') + "`r`n" + $_.Exception.Message)
+            [DateTimeOffset]::UtcNow.ToString('o') + "`r`n" + $_.Exception.Message +
+            "`r`nErrorId: " + $_.FullyQualifiedErrorId + "`r`n" + $_.ScriptStackTrace)
         throw 'MicroHack bootstrap failed. Inspect C:\MicroHack\bootstrap-error.txt privately on the VM; no configuration body is emitted.'
     }
 }

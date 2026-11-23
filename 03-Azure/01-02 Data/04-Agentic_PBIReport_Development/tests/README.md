@@ -1,6 +1,6 @@
 # Local checks and live-evidence boundary
 
-Run from the repository root with Python 3.11+ and PowerShell 7. No Azure/Fabric
+Run from the repository root with Python 3.11+, Node.js and PowerShell 7. No Azure/Fabric
 sign-in is needed. Use OS temp for generated examples/evidence, not a tracked folder.
 
 ```powershell
@@ -73,7 +73,11 @@ unrelated user configuration. Provider/host command doubles avoid changing the
 author's installed tools, settings or credentials. Configuration completion must
 explicitly leave Fabric authentication unverified. Run this suite with the
 guest's Windows PowerShell 5.1 as well as PowerShell 7: it covers empty JSON-array
-behavior and benign native stderr versus nonzero process exit codes.
+behavior and benign native stderr versus nonzero process exit codes. The actual
+bootstrap report-lock validator runs against Node.js with an npm-style empty
+root-package key, version mismatches, missing/invalid dependency integrity,
+non-HTTPS dependencies, a missing report package and malformed JSON. The live
+smoke also invokes this validator on the newly generated npm lock.
 
 Optionally run `& "$hack\tests\test_fabric_setup.ps1" -Live` for official public
 release metadata, the real complete Fabric archive and actual local marketplace

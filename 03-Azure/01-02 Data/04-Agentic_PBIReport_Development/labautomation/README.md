@@ -223,8 +223,20 @@ changed guest configuration blocks overwrite of learner work. A hook retry
 changes Run Command's run token while preserving stable credentials.
 Inspect sanitized ARM/Run Command status privately on failure. Do not enable
 transcripts/debugging around credential output or serialize parameter objects.
-Guest failures retain a timestamp and error message in
+Guest failures retain a timestamp, error message, error ID and script stack in
 `C:\MicroHack\bootstrap-error.txt` for private VM-side diagnosis.
+Without Windows VM credentials, an organizer with Azure VM Run Command permission
+can open the VM's **Operations > Run command > RunPowerShellScript** in Azure portal
+and run `Get-Content -LiteralPath 'C:\MicroHack\bootstrap-error.txt'`.
+Review the output privately for credentials before sharing it; do not dump the
+protected bootstrap configuration.
+
+Windows PowerShell 5.1 cannot deserialize npm's empty root-package JSON key:
+it reports an invalid argument named `name`. Report-lock validation therefore uses
+the already-installed Node.js parser to project named package entries before
+PowerShell checks the frozen report version and every dependency's HTTPS/SHA512
+integrity. The empty root entry is not a downloaded dependency. This does not
+change the selected package versions or relax the integrity checks.
 
 Detailed hook diagnostics are enabled by default:
 
