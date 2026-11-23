@@ -11,6 +11,11 @@ function Get-VerifiedAsset {
     if ($uri.Scheme -ne 'https' -or $uri.Query -or $uri.UserInfo -or $uri.Fragment -or $Asset.sha256 -notmatch '^[a-fA-F0-9]{64}$') {
         throw 'Invalid checksum-pinned public asset.'
     }
+    if ($Asset.PSObject.Properties['cache']) {
+        if ((Get-FileHash -LiteralPath $Asset.cache -Algorithm SHA256).Hash -ne $Asset.sha256) { throw 'Frozen asset cache checksum mismatch.' }
+        Copy-Item -LiteralPath $Asset.cache -Destination $Destination -Force
+        return
+    }
     # Official release/Marketplace downloads redirect to their CDNs; bytes remain hash-pinned.
     for ($attempt = 0; $attempt -lt 3; $attempt++) {
         try {
@@ -130,7 +135,8 @@ function Invoke-LabBootstrap {
     if (Test-Path -LiteralPath $marker) {
         if ((Get-Content -LiteralPath $marker -Raw).Trim() -ne $fingerprint) { throw 'Bootstrap configuration changed; preserve participant work and rebuild an approved empty VM.' }
         Assert-CsvManifest (Join-Path $root 'student')
-        foreach ($tool in $config.tools) {
+        $packages = Get-Content -LiteralPath "$root\host\packages\packages.lock.json" -Raw | ConvertFrom-Json
+        foreach ($tool in $packages.tools) {
             if (-not (Test-Path -LiteralPath (Get-LabToolPath $tool))) { throw 'Completed bootstrap is missing a tool executable.' }
         }
         if (-not (Test-Path -LiteralPath "$root\tools\report\node_modules\.bin\powerbi-report-author.cmd")) { throw 'Completed bootstrap is missing report authoring.' }
@@ -142,6 +148,8 @@ function Invoke-LabBootstrap {
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
+    . ([scriptblock]::Create($config.scripts.resolver))
+    $packages = Resolve-LabPackages "$root\host\packages" $fingerprint
     $student = "$staging\student"
     Copy-LabStudentFiles $config.source $student
     Assert-CsvManifest $student
@@ -154,8 +162,15 @@ It prepares your own CLI skills and VS Code extensions. Sign in interactively,
 open this student folder and verify the host and model with your coach.
 Use `python datasets\generate-data.py --validate` before Challenge 1.
 Business/design briefs are under `briefs`; the dictionary is under `datasets`.
-The pinned Fabric skills are spark-cli, semantic-model-authoring and powerbi-report-cli.
-These hosts use CLI/REST authoring; a modeling MCP is optional, not preconfigured.
+The complete Fabric and Power BI skill bundles are frozen at provisioning.
+Use the Start MicroHack shortcuts, which prepare your Windows profile offline.
+Fabric Core MCP is configured in both hosts. Sign into GitHub/Copilot separately
+from Fabric: use your assigned lab Entra identity for Fabric. Before Challenge 1,
+discover the fabric-core tools and actually list workspaces through that server.
+A configuration-complete message does not prove authentication or permissions.
+CLI/REST tools complement MCP for authoring operations it does not support.
+Do not update packages, extensions or plugins during this lab.
+The frozen package/version record is C:\MicroHack\host\packages\packages.lock.json.
 
 Follow the published lessons and the organizer's retention instructions.
 Only the organizer removes shared resources after every participant is finished.
@@ -163,26 +178,22 @@ In addition to F16, shared Bastion, NAT and public IPs incur charges until remov
 deleting participant VMs or pausing F16 does not remove these shared resources.
 '@ | Set-Content -LiteralPath "$student\README.md" -Encoding UTF8
     $skillsZip = "$staging\skills.zip"
-    Get-VerifiedAsset $config.skills $skillsZip
-    $skillPaths = @("$($config.skills.root)\common") + @($config.skills.names | ForEach-Object { "$($config.skills.root)\skills\$_" })
-    Expand-VerifiedZip $skillsZip "$staging\skills" -AllowedRelativePaths $skillPaths
-    $skillRoot = Get-SafeSourcePath "$staging\skills" $config.skills.root
-    New-Item -ItemType Directory -Path "$student\.github\skills", "$student\.vscode", "$root\host\skills", "$root\host\extensions" -Force | Out-Null
-    foreach ($name in $config.skills.names) {
-        Copy-StudentTree "$skillRoot\skills\$name" "$student\.github\skills\$name"
-        Copy-StudentTree "$skillRoot\skills\$name" "$root\host\skills\$name"
-    }
-    Copy-StudentTree "$skillRoot\common" "$student\.github\common"
-    if (-not (Test-Path -LiteralPath "$root\host\common")) { Copy-StudentTree "$skillRoot\common" "$root\host\common" }
-    @{'chat.useAgentSkills'=$true; 'extensions.autoUpdate'=$false; 'update.mode'='none'} |
-        ConvertTo-Json | Set-Content -LiteralPath "$student\.vscode\settings.json" -Encoding UTF8
-    foreach ($extension in $config.extensions) {
+    Get-VerifiedAsset $packages.skills $skillsZip
+    Expand-VerifiedZip $skillsZip "$staging\skills"
+    $skillRoot = Get-SafeSourcePath "$staging\skills" $packages.skills.root
+    $snapshot = Join-Path $env:ProgramData "MicroHack\skills-for-fabric\$($packages.skills.commit)"
+    $bundles = @(Initialize-LabFabricContent $skillRoot $student $snapshot $packages.skills.sha256)
+    New-Item -ItemType Directory -Path "$root\host\extensions" -Force | Out-Null
+    [IO.File]::WriteAllText("$root\initialize-user.ps1", $config.scripts.initializer, [Text.UTF8Encoding]::new($false))
+    . "$root\initialize-user.ps1"
+    Set-LabCoreMcp "$student\.vscode\mcp.json" 'servers'
+    Set-LabEditorSettings "$student\.vscode\settings.json" -Project
+    foreach ($extension in $packages.extensions) {
         Get-VerifiedAsset $extension "$root\host\extensions\$($extension.id).vsix"
     }
-    $config.extensions | ConvertTo-Json | Set-Content -LiteralPath "$root\host\extensions.json" -Encoding UTF8
     New-Item -ItemType Directory -Path "$root\tools" -Force | Out-Null
     $pathEntries = @()
-    foreach ($tool in $config.tools) {
+    foreach ($tool in $packages.tools) {
         $download = "$staging\$($tool.name).$($tool.format)"
         Get-VerifiedAsset $tool $download
         if ($tool.format -eq 'zip') {
@@ -200,65 +211,155 @@ deleting participant VMs or pausing F16 does not remove these shared resources.
             if ($process.ExitCode -notin 0, 3010) { throw 'Python installation failed.' }
         } else { throw 'Unsupported tool package.' }
         $executable = Get-LabToolPath $tool
-        $versionOutput = & $executable --version 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($tool.version)) {
+        $versionOutput = Invoke-LabProfileCommand $executable @('--version')
+        if ($versionOutput -notmatch [regex]::Escape($tool.version)) {
             throw "Pinned tool failed its exact version check: $($tool.name)"
         }
         $pathEntries += Split-Path -Parent $executable
     }
     $reportRoot = "$root\tools\report"
     New-Item -ItemType Directory -Path $reportRoot -Force | Out-Null
-    [IO.File]::WriteAllText("$reportRoot\package.json", $config.npm.package, [Text.UTF8Encoding]::new($false))
-    [IO.File]::WriteAllText("$reportRoot\package-lock.json", $config.npm.lock, [Text.UTF8Encoding]::new($false))
     $env:Path = ($pathEntries -join ';') + ';' + $env:Path
-    $node = Get-LabToolPath ($config.tools | Where-Object name -EQ 'node')
+    $node = Get-LabToolPath ($packages.tools | Where-Object name -EQ 'node')
     $npm = Join-Path (Split-Path -Parent $node) 'npm.cmd'
-    & $npm ci --prefix $reportRoot --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Locked report runtime installation failed.' }
-    & "$reportRoot\node_modules\.bin\powerbi-report-author.cmd" --version | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Report authoring CLI startup failed.' }
+    if (-not (Test-Path -LiteralPath "$reportRoot\package-lock.json")) {
+        $package = @{
+            name = 'microhack-agentic-pbi-runtime'; version = '1.0.0'; private = $true
+            dependencies = @{ '@microsoft/powerbi-report-authoring-cli' = $packages.report.version }
+        }
+        [IO.File]::WriteAllText("$reportRoot\package.json", ($package | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+        $null = Invoke-LabProfileCommand $npm @('install', '--prefix', $reportRoot, '--package-lock-only',
+            '--ignore-scripts', '--no-audit', '--no-fund', "--registry=$($packages.report.registry)")
+    }
+    $reportLock = Get-Content -LiteralPath "$reportRoot\package-lock.json" -Raw | ConvertFrom-Json
+    if ($reportLock.packages.'node_modules/@microsoft/powerbi-report-authoring-cli'.version -ne $packages.report.version) {
+        throw 'Report runtime lock conflicts with the provisioning snapshot.'
+    }
+    foreach ($entry in $reportLock.packages.PSObject.Properties) {
+        if ($entry.Name -and (-not $entry.Value.PSObject.Properties['integrity'] -or $entry.Value.integrity -notmatch '^sha512-' -or
+            -not $entry.Value.PSObject.Properties['resolved'] -or $entry.Value.resolved -notmatch '^https://')) {
+            throw 'Report runtime dependency lacks HTTPS/SHA512 integrity.'
+        }
+    }
+    $null = Invoke-LabProfileCommand $npm @('ci', '--prefix', $reportRoot,
+        '--ignore-scripts', '--no-audit', '--no-fund', "--registry=$($packages.report.registry)")
+    $null = Invoke-LabProfileCommand "$reportRoot\node_modules\.bin\powerbi-report-author.cmd" @('--version')
     $pathEntries += "$reportRoot\node_modules\.bin"
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $segments = @($pathEntries) + @($machinePath.Split(';') | Where-Object { $_ -and $_ -notlike "$root\tools\*" })
     [Environment]::SetEnvironmentVariable('Path', ($segments -join ';'), 'Machine')
-    # Prepare each interactive user's profile, not Run Command's SYSTEM profile.
-    $profileSetup = @'
+    [Environment]::SetEnvironmentVariable('COPILOT_AUTO_UPDATE', 'false', 'Machine')
+    $env:COPILOT_AUTO_UPDATE = 'false'
+    $launcher = @'
+param([ValidateSet('CLI','VSCode')][string]$HostMode = 'CLI')
 $ErrorActionPreference = 'Stop'
-$target = Join-Path $env:USERPROFILE '.copilot'
-if (-not (Test-Path -LiteralPath (Join-Path $target 'microhack-configured'))) {
-    $initializing = Join-Path $target 'microhack-initializing'
-    if (-not (Test-Path -LiteralPath $initializing) -and
-        ((Test-Path -LiteralPath (Join-Path $target 'skills')) -or (Test-Path -LiteralPath (Join-Path $target 'common')))) {
-        throw 'Existing Copilot configuration: merge manually; MicroHack will not overwrite it.'
-    }
-    New-Item -ItemType Directory -Path $target -Force | Out-Null
-    New-Item -ItemType File -Path $initializing -Force | Out-Null
-    foreach ($folder in 'skills','common') {
-        New-Item -ItemType Directory -Path (Join-Path $target $folder) -Force | Out-Null
-        Get-ChildItem -LiteralPath "C:\MicroHack\host\$folder" -Force | Copy-Item -Destination (Join-Path $target $folder) -Recurse -Force
-    }
-    $code = 'C:\MicroHack\tools\vscode\bin\code.cmd'
-    foreach ($extension in @(Get-Content 'C:\MicroHack\host\extensions.json' -Raw | ConvertFrom-Json)) {
-        & $code --install-extension "C:\MicroHack\host\extensions\$($extension.id).vsix" --force | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "VS Code extension installation failed: $($extension.id)" }
-    }
-    $installed = & $code --list-extensions --show-versions
-    if ($LASTEXITCODE -ne 0) { throw 'Could not verify VS Code extensions.' }
-    foreach ($extension in @(Get-Content 'C:\MicroHack\host\extensions.json' -Raw | ConvertFrom-Json)) {
-        if ("$($extension.id)@$($extension.version)" -notin $installed) { throw 'Pinned VS Code extension missing.' }
-    }
-    New-Item -ItemType File -Path (Join-Path $target 'microhack-configured') | Out-Null
-    Remove-Item -LiteralPath $initializing -Force
-}
+& C:\MicroHack\initialize-user.ps1
+Set-Location -LiteralPath C:\MicroHack\student
+if ($HostMode -eq 'CLI') { & C:\MicroHack\tools\copilot\copilot.exe --no-auto-update }
+else { & C:\MicroHack\tools\vscode\bin\code.cmd C:\MicroHack\student }
 '@
-    Set-Content -LiteralPath "$root\initialize-user.ps1" -Value $profileSetup -Encoding UTF8
+    Set-Content -LiteralPath "$root\Start-MicroHack.ps1" -Value $launcher -Encoding UTF8
+    $files = @(
+        Get-ChildItem -LiteralPath $snapshot -Recurse -File -Force
+        Get-Item -LiteralPath "$root\initialize-user.ps1", "$root\Start-MicroHack.ps1", "$root\host\packages\packages.lock.json", "$reportRoot\package-lock.json"
+        Get-ChildItem -LiteralPath "$root\host\extensions" -File
+        foreach ($tool in $packages.tools) { Get-Item -LiteralPath (Get-LabToolPath $tool) }
+    ) | ForEach-Object { @{ path = $_.FullName; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash } }
+    @{
+        marketplace = $snapshot; bundles = $bundles; files = @($files)
+        extensions = @($packages.extensions | ForEach-Object {
+            @{ id = $_.id; version = $_.version; path = "$root\host\extensions\$($_.id).vsix" }
+        })
+    } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath "$root\host\host-manifest.json" -Encoding UTF8
+    foreach ($path in @($snapshot, "$root\host", "$root\tools")) { Set-LabSharedContentAcl $path }
+    foreach ($mode in 'CLI', 'VSCode') {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) "Start MicroHack $mode.lnk"))
+        $shortcut.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+        $shortcut.Arguments = "-NoProfile -NoExit -ExecutionPolicy Bypass -File C:\MicroHack\Start-MicroHack.ps1 -HostMode $mode"
+        $shortcut.WorkingDirectory = "$root\student"
+        $shortcut.Save()
+    }
     New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\MicroHackAgenticPBI' -Force | Out-Null
     Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\MicroHackAgenticPBI' -Name 'StubPath' `
         -Value 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\MicroHack\initialize-user.ps1'
-    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\MicroHackAgenticPBI' -Name 'Version' -Value '2,0,0,0'
+    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\MicroHackAgenticPBI' -Name 'Version' -Value '3,0,0,0'
     Move-Item -LiteralPath $student -Destination "$root\student"
     Set-Content -LiteralPath $marker -Value $fingerprint -Encoding ASCII
     Remove-Item -LiteralPath $staging -Recurse -Force
+}
+
+function Initialize-LabFabricContent {
+    param([string]$SourceRoot, [string]$StudentRoot, [string]$SnapshotRoot, [string]$ArchiveHash)
+    $utf8 = [Text.UTF8Encoding]::new($false)
+    $catalog = Get-Content -LiteralPath "$SourceRoot\.github\plugin\marketplace.json" -Raw | ConvertFrom-Json
+    $bundles = @()
+    $selected = @()
+    foreach ($name in 'fabric-skills', 'powerbi-authoring') {
+        $entries = @($catalog.plugins | Where-Object name -EQ $name)
+        if ($entries.Count -ne 1 -or $entries[0].source -ne "./plugins/$name") { throw "Unsupported upstream bundle layout: $name." }
+        $entry = $entries[0]
+        $entry.mcpServers = [pscustomobject]@{}
+        $selected += $entry
+        $bundles += @{ name = $name; version = $entry.version }
+        $pluginRoot = "$SourceRoot\plugins\$name"
+        foreach ($relative in '.github\plugin\plugin.json', '.claude-plugin\plugin.json') {
+            $path = Join-Path $pluginRoot $relative
+            $plugin = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+            if ($plugin.name -ne $name -or $plugin.version -ne $entry.version) { throw 'Upstream plugin manifest/catalog mismatch.' }
+            $plugin.mcpServers = [pscustomobject]@{}
+            [IO.File]::WriteAllText($path, ($plugin | ConvertTo-Json -Depth 20), $utf8)
+        }
+        [IO.File]::WriteAllText("$pluginRoot\.mcp.json", '{"mcpServers":{}}', $utf8)
+    }
+    $catalog.plugins = $selected
+    foreach ($relative in '.github\plugin\marketplace.json', '.claude-plugin\marketplace.json') {
+        [IO.File]::WriteAllText((Join-Path $SourceRoot $relative), ($catalog | ConvertTo-Json -Depth 20), $utf8)
+    }
+    [IO.File]::WriteAllText("$SourceRoot\.mcp.json", '{"mcpServers":{}}', $utf8)
+    foreach ($name in 'spark-cli', 'semantic-model-authoring', 'powerbi-report-cli') {
+        if (-not (Test-Path -LiteralPath "$SourceRoot\skills\$name\SKILL.md")) { throw "Required Fabric skill missing: $name." }
+    }
+    foreach ($folder in 'skills', 'common', 'agents') { Copy-StudentTree "$SourceRoot\$folder" "$StudentRoot\.github\$folder" }
+    @'
+# Frozen MicroHack environment
+
+Use the installed Fabric skills and Fabric Core MCP from the beginning.
+Before Challenge 1, authenticate fabric-core with the assigned lab Entra identity
+and execute a read-only workspace-list call. GitHub/Copilot authentication and
+Azure CLI authentication do not authenticate the MCP connection.
+Use CLI/REST tools alongside MCP for unsupported authoring operations.
+Create only Lakehouse, Notebook, SemanticModel and Report items in the assigned
+workspace/capacity. Manual Fabric experimentation within that scope is allowed.
+Do not check for or install newer tools, plugins, skills or extensions.
+The VM's provisioning snapshot is fixed until destruction. Report missing or
+changed components to the coach; do not overwrite student work or credentials.
+'@ | Set-Content -LiteralPath "$StudentRoot\.github\copilot-instructions.md" -Encoding UTF8
+    Set-Content -LiteralPath "$SourceRoot\.microhack-source.sha256" -Value $ArchiveHash -Encoding ASCII
+    if (Test-Path -LiteralPath $SnapshotRoot) {
+        if (-not (Test-Path -LiteralPath "$SnapshotRoot\.microhack-source.sha256") -or
+            (Get-Content -LiteralPath "$SnapshotRoot\.microhack-source.sha256" -Raw).Trim() -ne $ArchiveHash) {
+            throw 'Unowned or conflicting Fabric snapshot exists; it was not overwritten.'
+        }
+    } else {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $SnapshotRoot) -Force | Out-Null
+        Move-Item -LiteralPath $SourceRoot -Destination $SnapshotRoot
+    }
+    return $bundles
+}
+
+function Set-LabSharedContentAcl {
+    param([string]$Path)
+    $acl = Get-Acl -LiteralPath $Path
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($entry in @(
+        @('S-1-5-18', 'FullControl'), @('S-1-5-32-544', 'FullControl'), @('S-1-5-32-545', 'ReadAndExecute')
+    )) {
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new($entry[0]), $entry[1], 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+        $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
 function Get-LabToolPath {

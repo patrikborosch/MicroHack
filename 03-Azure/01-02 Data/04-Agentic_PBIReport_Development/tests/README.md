@@ -11,6 +11,8 @@ python -B -m unittest discover -s "$hack\tests" -p 'test_*.py' -v
 python -B "$hack\tests\check-structure.py"
 & "$hack\tests\test_automation.ps1"
 & "$hack\tests\test_platform_hooks.ps1"
+& "$hack\tests\test_fabric_setup.ps1"
+& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -File "$hack\tests\test_fabric_setup.ps1"
 az bicep build --file "$hack\labautomation\main.bicep" --outfile "$env:TEMP\agentic-pbi-main.json"
 az bicep build --file "$hack\labautomation\shared.bicep" --outfile "$env:TEMP\agentic-pbi-shared.json"
 git diff --check
@@ -51,7 +53,7 @@ alone misses this serialization failure; both Bicep secure-string parameters
 must reach the cmdlet as native CLR `SecureString` values. Fixtures decode the
 bootstrap only privately to inspect its contents and redaction behavior.
 
-`test_automation.ps1` checks runtime settings/pins, schemas and signatures,
+`test_automation.ps1` checks runtime policy/reference pins, schemas and signatures,
 ownership/implicit disks, ARM polling/failure paths and real temporary ZIP
 extraction. Polling tests exercise real `HttpResponseHeaders` for empty headers,
 `Azure-AsyncOperation`, `Location` and `Retry-After`, including transient failures
@@ -63,6 +65,24 @@ Diagnostic fixtures also verify inner exception/error-detail visibility and
 SecureString, payload, credential-field, URL-query and bearer/JWT redaction.
 It does not install Windows tools, run the guest bootstrap, perform interactive
 first-login initialization, test MCP connectivity or certify a live tenant.
+
+`test_fabric_setup.ps1` exercises provisioning snapshot reuse/drift/corruption,
+idempotent backed-up MCP JSON merges, conflicting server preservation, per-profile
+plugin/VSIX setup, disabled updates, interrupted setup retry and isolation of
+unrelated user configuration. Provider/host command doubles avoid changing the
+author's installed tools, settings or credentials. Configuration completion must
+explicitly leave Fabric authentication unverified. Run this suite with the
+guest's Windows PowerShell 5.1 as well as PowerShell 7: it covers empty JSON-array
+behavior and benign native stderr versus nonzero process exit codes.
+
+Optionally run `& "$hack\tests\test_fabric_setup.ps1" -Live` for official public
+release metadata, the real complete Fabric archive and actual local marketplace
+installation/skill discovery and auxiliary MCP exclusion in a disposable
+`COPILOT_HOME` under OS temp. It also resolves/installs the current report runtime
+with a new lock, disabled lifecycle scripts and an isolated npm configuration/cache.
+It requires the author's Copilot CLI and Node/npm executables but no sign-in. It never deploys,
+changes the author's profile, installs Windows tools or authenticates Fabric.
+This smoke check is not a replacement for the real VM/dual-host MCP pilot.
 
 `test_packaging.py` applies this lab's documented audience removals and separate
 ZIP exclusions to the current source, checks local Markdown file targets with

@@ -61,10 +61,11 @@ try {
     $user = '22222222-2222-2222-2222-222222222222'
     $admin = '33333333-3333-3333-3333-333333333333'
     $settings = Read-LabSettings
-    Assert-True ($settings.Tools.Count -eq 7) 'Seven real checksum-pinned tool packages'
+    Assert-True ($settings.PackagePolicy -eq 'latest-stable-at-provisioning') 'Provision once, then freeze package policy'
     $guest = Get-LabGuestConfiguration $settings
     Assert-True ($guest.source.files.Count -eq 25) 'Both scenarios and required support files supplied without a private config'
-    $npmLock = $guest.npm.lock | ConvertFrom-Json -AsHashtable
+    Assert-True ($guest.scripts.resolver -match 'function Resolve-LabPackages' -and $guest.scripts.initializer -match 'function Invoke-LabUserInitialization') 'Local resolver and profile setup embedded without a moving script URL'
+    $npmLock = Get-Content -LiteralPath "$lab\npm-runtime\package-lock.json" -Raw | ConvertFrom-Json -AsHashtable
     Assert-True ($npmLock.packages['node_modules/@microsoft/powerbi-report-authoring-cli'].version -eq '0.1.1') 'Report CLI lock supplied'
     foreach ($package in $npmLock.packages.Values) {
         if ($package.ContainsKey('resolved')) {

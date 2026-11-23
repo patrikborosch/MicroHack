@@ -33,14 +33,7 @@ function Assert-LabPublicUri {
 function Read-LabSettings {
     $settings = Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'lab-settings.psd1')
     if ($settings.SourceRef -notmatch '^[a-f0-9]{40}$') { throw 'Student source must use an immutable commit.' }
-    foreach ($asset in @($settings.Tools) + @($settings.Skills) + @($settings.Extensions)) {
-        Assert-LabPublicUri $asset.uri
-        if ($asset.sha256 -notmatch '^[a-f0-9]{64}$') { throw 'Every asset needs a SHA256 digest.' }
-    }
-    foreach ($name in 'powershell', 'git', 'node', 'vscode', 'copilot', 'azure-cli', 'python') {
-        $tool = @($settings.Tools | Where-Object name -EQ $name)
-        if ($tool.Count -ne 1 -or $tool[0].version -notmatch '^\d+\.\d+\.\d+$') { throw "Missing or unpinned tool: $name" }
-    }
+    if ($settings.PackagePolicy -ne 'latest-stable-at-provisioning') { throw 'Unsupported package policy.' }
     return $settings
 }
 
@@ -150,10 +143,10 @@ function Get-LabGuestConfiguration {
     return @{
         bootstrap = Get-LabFingerprint @{ script = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'bootstrap.ps1') -Raw).Replace("`r`n", "`n") }
         source = @{ ref = $Settings.SourceRef; files = $files }
-        tools = $Settings.Tools; skills = $Settings.Skills; extensions = $Settings.Extensions
-        npm = @{
-            package = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'npm-runtime\package.json') -Raw).Replace("`r`n", "`n")
-            lock = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'npm-runtime\package-lock.json') -Raw).Replace("`r`n", "`n")
+        packagePolicy = $Settings.PackagePolicy
+        scripts = @{
+            resolver = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'resolve-packages.ps1') -Raw).Replace("`r`n", "`n")
+            initializer = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'initialize-user.ps1') -Raw).Replace("`r`n", "`n")
         }
     }
 }

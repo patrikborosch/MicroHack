@@ -17,7 +17,7 @@ screenshots or internal documents in this public file.
 | AC-08 | Every pilot identity has Copilot/model availability, workspace assignment and enabled author license | NOT VALIDATED |
 | AC-09 | Actual supported ItemCreation policy allows four types and denies another through each route; managed SQL endpoint verified | NOT VALIDATED |
 | AC-10 | A cannot read/write/list B's workspace or log on to B's VM; no shared capacity admin/secrets | NOT VALIDATED |
-| AC-11 | Complete path through CLI and separately configured VS Code Agent; tested versions retained | NOT VALIDATED |
+| AC-11 | Complete path through CLI and separately configured VS Code Agent; both discover complete Fabric bundles and authenticate Core MCP/list workspaces before Challenge 1; frozen versions retained | NOT VALIDATED |
 | AC-12 | Independent static/live/cleanup evidence and measured F16 concurrency; approved event-duration gate | NOT VALIDATED |
 
 Keep a private row per assertion: ID, source ref, dataset hash, configuration/host,

@@ -27,7 +27,7 @@ metadata but is not access to other participants' VM credentials or Fabric data.
 [lab-settings.psd1](lab-settings.psd1) holds **nonsecret implementation defaults**:
 Windows Server 2022 Datacenter Gen2 (Azure license included, no Hybrid Benefit),
 `Standard_D4s_v5`, 128 GB OS disk, shared Standard Bastion with two scale units,
-immutable student/skill sources and explicit tool/VSIX versions and SHA256 hashes.
+immutable student source and the latest-stable-at-provisioning package policy.
 These are source defaults, not measured cohort, budget or performance approvals.
 Review changes to this file normally; never add credentials or private identities.
 
@@ -99,38 +99,84 @@ Descriptor SHA256 values describe immutable **Git blob bytes**, not Windows
 working-tree text after CRLF conversion. The VM also receives a generated
 exercise README with current host and shared-resource cleanup guidance.
 
+On the VM's first provisioning attempt, `resolve-packages.ps1` resolves the latest
+stable Windows x64 PowerShell, MinGit, Node, VS Code, Copilot CLI, Azure CLI and
+Python; stable Copilot/Chat VSIX packages; the current Fabric skills main commit;
+and the stable report CLI version. Prereleases are excluded. It persists exact
+URLs, versions/commit, available publisher digests and resolution time in
+`C:\MicroHack\host\packages\packages.lock.json` **before installation**.
+Retries use that record, not today's latest releases. If feeds, rate limits,
+checksums or upstream layouts prevent resolution, provisioning fails explicitly;
+there is no silent fallback to an old package set. Permit the official GitHub API,
+Node, Python, VS Code, Marketplace/CDN and public Microsoft npm feed endpoints.
+Pilot parallel provisioning against anonymous API/download limits.
+
 Tools are fetched from official release hosts and checked before use: PowerShell,
 MinGit, Node, VS Code and Copilot are ZIPs; Python uses its all-user installer and
 Azure CLI its all-user MSI. Redirects to release CDNs are allowed, bounded, and
-still checked against the pinned final-byte digest. Extracted ZIPs reject
+checked against publisher digests where supplied (GitHub assets, Node and VS Code).
+Python, VSIX and the commit-addressed Fabric archive are acquired through official
+HTTPS endpoints and their downloaded SHA256 values are frozen locally; these
+recorded hashes are **not independently published checksum attestations**.
+Cached bytes are checked on reuse. Extracted ZIPs reject
 traversal, symbolic links, duplicate paths and excessive expansion. Tool versions
 are checked after installation. Python and portable tools live under
 `C:\MicroHack\tools`; Azure CLI uses its vendor's Program Files directory.
 
-The report authoring CLI and all transitive npm dependencies use
-[package.json](npm-runtime/package.json) and
-[package-lock.json](npm-runtime/package-lock.json), installed with `npm ci`,
-SHA512 integrity and lifecycle scripts disabled. The public Microsoft npm feed
-URLs were checked anonymously; no employee feed credentials are required.
+The report runtime creates its exact dependency lock once under
+`C:\MicroHack\tools\report`, then uses `npm ci`, SHA512 integrity and disabled
+lifecycle scripts. Its lock is retained for retries and inspection. The checked-in
+[reference npm lock](npm-runtime/package-lock.json) describes the earlier locally
+exercised toolchain, not the dynamically resolved VM runtime. No employee npm
+credentials are required. New stable versions must still pass the event pilot;
+"latest" is not a compatibility or live-acceptance claim.
 
-The pinned official Fabric skills archive supplies `spark-cli`,
-`semantic-model-authoring`, `powerbi-report-cli` and their shared references.
-These current names replace the older split authoring-skill names.
-Both hosts use CLI/REST authoring tools; no consumption-only or fictitious MCP
-server registration is presented as an authoring capability.
+The complete Fabric repository is staged under
+`C:\ProgramData\MicroHack\skills-for-fabric\<commit>`, readable by all Windows
+users and writable by SYSTEM/Administrators. The lab-adapted marketplace retains
+both complete official `fabric-skills` and `powerbi-authoring` skill/agent bundles.
+Their auxiliary MCP registrations are deliberately emptied in the staged copy:
+some upstream entries launch `npx ...@latest`, which would break the frozen lab.
+The original downloaded archive remains checksum-recorded in the package cache.
+**Fabric Core is registered explicitly**, not assumed to ship with those bundles.
 
-- **Copilot CLI:** the per-user initializer installs skills and common references
-  into that user's `.copilot` profile, not SYSTEM's profile.
-- **VS Code Agent:** separate project skills/common references are staged in
-  `C:\MicroHack\student\.github`; pinned Copilot and Chat VSIX files are installed
-  and their versions checked in the interactive user's VS Code profile.
+- **Copilot CLI:** each Windows profile registers the local marketplace and both
+  plugins, plus `fabric-core` in `%USERPROFILE%\.copilot\mcp-config.json`.
+- **VS Code Agent:** the full project skill/common/agent trees are staged under
+  `C:\MicroHack\student\.github`; local Copilot and Chat VSIX files are installed
+  in each interactive user's profile. `.vscode\mcp.json` configures Core separately.
 
-Active Setup invokes `C:\MicroHack\initialize-user.ps1` on first login. Run it
-manually if needed. It refuses to overwrite an unrelated existing skill profile;
-an interrupted initializer retries its own marked installation. Sign in
-interactively as the assigned participant, select an entitled approved model,
-then verify each chosen host's skills, authoring commands and authentication.
-No organizer tokens are copied and no sign-in is automated.
+Both point to `https://api.fabric.microsoft.com/v1/mcp/core`. No static tokens,
+organizer credentials or shared authentication caches are installed. GitHub and
+Entra identities are independent; using another GitHub account in the same Windows
+profile does not change installed content. Different Windows profiles initialize
+separately. User configuration merges preserve unrelated entries and back up
+changed JSON atomically; conflicting marketplace/plugin/Core entries stop rather
+than silently replacing personal settings.
+
+Active Setup invokes `C:\MicroHack\initialize-user.ps1` on interactive login.
+The **Start MicroHack CLI/VSCode** desktop shortcuts also run it, then open the
+exercise folder. It only uses the frozen source and local VSIX files; it never
+checks for a newer release. Interrupted setup retries missing components without
+reinstalling successful bundles. A host-content hash inventory detects altered
+snapshots. CLI automatic updates are disabled at machine/session level, plugin
+updates in the user settings, and VS Code application/extension updates in each
+user profile. Do not update manually. This does not disable OS security updates
+or freeze Microsoft-hosted Fabric/MCP/GitHub services.
+
+Configuration completion is recorded separately from authentication. Before
+Challenge 1, **each supported host must successfully authenticate Core MCP with
+the assigned lab Entra identity and execute a read-only workspace-list tool**.
+Azure CLI login or an installed skill is not that proof. Complete delegated
+consent/Conditional Access preflight without granting participants tenant admin.
+CLI/REST tools remain available for unsupported authoring operations, but cannot
+replace this MCP gate. Native Windows broker/`ENTRA_CONFIG` failures remain a
+pilot blocker, not something fixed by configuration distribution.
+
+This source change is for newly provisioned VMs. It does not update existing live
+VMs: bootstrap/guest fingerprints intentionally reject changed configurations to
+preserve student work. Arrange an explicit clean rebuild for the next pilot; no
+live VM is upgraded or destroyed by authoring these files.
 
 Both scenarios are at `C:\MicroHack\student\datasets`; briefs are at
 `C:\MicroHack\student\briefs`. Open that exercise folder, not the source repository.

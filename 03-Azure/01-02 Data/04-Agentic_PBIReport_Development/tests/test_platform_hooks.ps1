@@ -183,7 +183,7 @@ function New-AzResourceGroupDeployment {
         Assert-True ($p.image.version -eq '20348.100.2') 'Exact shared-resolved image passed to participant'
         Assert-True ($p.subnetId -in $script:subnets) 'Participant NIC uses a shared-provisioned subnet'
         $guest=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($script:lastBootstrap)) | ConvertFrom-Json
-        Assert-True ($guest.source.files.Count -eq 25 -and $guest.tools.Count -eq 7) 'Complete guest payload built without event file'
+        Assert-True ($guest.source.files.Count -eq 25 -and $guest.packagePolicy -eq 'latest-stable-at-provisioning' -and $guest.scripts.initializer) 'Complete frozen-setup guest payload built without event file'
         Assert-True ($script:lastBootstrap.Length -gt 7000) 'Managed Run Command supports the real payload instead of a command-line limit'
         $vmId="$prefix/Microsoft.Compute/virtualMachines/vm-$($p.suffix)"
         $script:resources[$vmId]=[pscustomobject]@{ResourceId=$vmId;ResourceGroupName=$ResourceGroupName;ResourceType='Microsoft.Compute/virtualMachines';Name="vm-$($p.suffix)";Tags=$p.tags}
