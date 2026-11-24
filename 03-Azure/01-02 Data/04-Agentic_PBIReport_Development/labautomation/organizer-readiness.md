@@ -9,7 +9,15 @@ Before delivery, record private evidence for:
 
 - Enabled Power BI author service plans and seat stock for each identity, plus
   Copilot seats, permitted models and usage budget. F16 alone is not a license.
-- Fabric workspace creation and assignment rights, and supported ItemCreation
+- Fabric **capacity Contributor** permissions for the assigned lab users or their
+  scoped security group, configured by a capacity administrator after F16 creation.
+  Follow the [capacity permission setup](README.md#enable-participant-workspace-assignment-after-capacity-provisioning).
+  Azure subscription Reader is unchanged; Azure IAM Contributor is not a substitute.
+  Confirm the tenant's Create workspaces setting includes those identities and
+  verify a pilot participant can create their own workspace and assign it to the
+  correct capacity as workspace Admin. REST assignment requires
+  `Capacity.ReadWrite.All` and `Workspace.ReadWrite.All` delegated scopes.
+- Supported ItemCreation
   policies for Lakehouse, Notebook, SemanticModel and Report. Verify the managed
   SQL endpoint dependency and coverage for new workspaces. Do not grant capacity
   admin to participants or pretend instructions enforce allowed types.

@@ -84,5 +84,6 @@ for ($attempt = 0; $attempt -lt 60; $attempt++) {
 }
 if (-not $active) { throw 'Shared capacity did not become Active within five minutes; participant fan-out must not start.' }
 Write-Warning 'Infrastructure provisioned only. Organizers must verify Fabric assignment permissions, ItemCreation policy coverage, licenses and both host journeys before participant admission.'
+Write-Warning "Fabric permission setup required for ${capacityName}: an authorized capacity administrator must add this subscription's lab users under Fabric Admin portal > Capacity settings > Fabric capacity > Details > Contributor permissions > Specific users or security groups. This hook does not grant it. Azure IAM Contributor is not a substitute; keep participant capacity administration disabled."
 @{ HackboxCredential = @{ name = 'Shared capacity'; value = $capacityName; note = "F16 in $resourceGroup. No participant capacity-administrator grants. Create your workspace with Copilot in Challenge 1." } }
 @{ HackboxCredential = @{ name = 'Shared Bastion'; value = "bastion-$suffix"; note = 'Browser RDP to private participant VMs. Shared NAT, Bastion and public endpoint charges are additional to F16.' } }

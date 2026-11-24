@@ -52,6 +52,46 @@ output. Participant IDs are rejected as capacity administrators. An authorized
 Fabric administrator must still arrange workspace assignment permissions and
 governance; ARM ownership does not imply Fabric workspace access.
 
+### Enable participant workspace assignment after capacity provisioning
+
+An authorized capacity administrator must configure **Fabric capacity Contributor
+permissions**, not Azure IAM Contributor. Keep subscription Reader and
+participant-RG Owner unchanged. Azure Reader does not grant Fabric assignment
+rights; Azure Contributor would grant infrastructure management rather than the
+intended workspace-assignment permission.
+
+After the shared F16 is Active, and before admitting participants:
+
+1. Sign into the lab tenant's Fabric portal as an authorized capacity administrator.
+2. Open **Settings > Admin portal > Capacity settings > Fabric capacity**.
+3. Select the exact shared capacity name returned by `shared-deploy-lab.ps1`.
+4. Under **Details > Contributor permissions**, select **Specific users or
+   security groups** and add the assigned lab users for that subscription, or an
+   organizer-managed security group containing exactly those users.
+5. Select **Apply**. Do not choose the entire organization or add participants
+   under **Admin permissions**.
+6. Have the Fabric tenant administrator verify that **Create workspaces** permits
+   those identities. Confirm the participants have the required authoring
+   entitlement and API consent.
+
+A participant creates their own workspace in Challenge 1 and is its workspace
+Admin. Together with capacity Contributor, this permits assignment to the F16.
+For REST assignment, the delegated scopes are `Capacity.ReadWrite.All` and
+`Workspace.ReadWrite.All`; Azure CLI/MCP authentication must use the assigned lab
+Entra identity. Record an actual successful assignment in the pilot, not merely
+an Azure role assignment or a visible capacity name.
+
+This is an explicit organizer step, **not an automated grant by these hooks**.
+The deployed ARM API exposes `administration.members` for capacity administrators,
+not this contributor allow-list. No undocumented Fabric endpoint or capacity-admin
+substitute is used. Apply this setting to the existing successfully deployed
+capacity; it does not require resetting/rebuilding participant VMs. Repeat it for
+each newly created subscription capacity.
+
+References: [capacity Contributor permissions](https://learn.microsoft.com/en-us/fabric/admin/capacity-settings#details),
+[tenant settings](https://learn.microsoft.com/en-us/fabric/admin/tenant-settings-index),
+and [workspace assignment API permissions](https://learn.microsoft.com/en-us/rest/api/fabric/core/workspaces/assign-to-capacity).
+
 ## Infrastructure and private VM access
 
 The shared hook provisions once per subscription:
