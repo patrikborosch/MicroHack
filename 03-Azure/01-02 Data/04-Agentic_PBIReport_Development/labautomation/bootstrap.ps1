@@ -231,6 +231,7 @@ deleting participant VMs or pausing F16 does not remove these shared resources.
         $null = Invoke-LabProfileCommand $npm @('install', '--prefix', $reportRoot, '--package-lock-only',
             '--ignore-scripts', '--no-audit', '--no-fund', "--registry=$($packages.report.registry)")
     }
+    Complete-LabReportIntegrity "$reportRoot\package-lock.json" $node
     Assert-LabReportLock "$reportRoot\package-lock.json" $packages.report.version $node
     $null = Invoke-LabProfileCommand $npm @('ci', '--prefix', $reportRoot,
         '--ignore-scripts', '--no-audit', '--no-fund', "--registry=$($packages.report.registry)")
@@ -357,6 +358,73 @@ function Get-LabToolPath {
     param($Tool)
     if ($Tool.format -eq 'zip') { return Join-Path "C:\MicroHack\tools\$($Tool.name)" $Tool.executable }
     return $Tool.executable
+}
+
+function Complete-LabReportIntegrity {
+    param([string]$Path, [string]$NodeExecutable)
+    $completeIntegrity = @'
+const fs = require('node:fs');
+const crypto = require('node:crypto');
+const path = process.argv[1];
+async function run() {
+    const lock = JSON.parse(fs.readFileSync(path, 'utf8'));
+    if (!lock.packages || typeof lock.packages !== 'object' || Array.isArray(lock.packages)) {
+        throw new Error('Report runtime lock has no package dictionary.');
+    }
+    let changed = false;
+    for (const [name, pkg] of Object.entries(lock.packages)) {
+        if (name === '') continue;
+        if (!pkg || typeof pkg !== 'object' || typeof pkg.resolved !== 'string') {
+            throw new Error(`Missing report dependency metadata: ${name}`);
+        }
+        let url = new URL(pkg.resolved);
+        if (url.protocol !== 'https:' || url.username || url.password) {
+            throw new Error(`Unsafe report dependency URL: ${name}`);
+        }
+        if (/^sha512-/.test(pkg.integrity)) continue;
+        if (!/^sha1-[A-Za-z0-9+/]{27}=$/.test(pkg.integrity)) {
+            throw new Error(`Unsupported report dependency checksum: ${name}`);
+        }
+        const signal = AbortSignal.timeout(120000);
+        let response;
+        for (let redirects = 0; redirects <= 5; redirects++) {
+            response = await fetch(url, {redirect: 'manual', signal});
+            if (![301, 302, 303, 307, 308].includes(response.status)) break;
+            const location = response.headers.get('location');
+            if (!location || redirects === 5) throw new Error(`Invalid report dependency redirect: ${name}`);
+            url = new URL(location, url);
+            if (url.protocol !== 'https:' || url.username || url.password) {
+                throw new Error(`Unsafe report dependency redirect: ${name}`);
+            }
+            if (response.body) await response.body.cancel();
+        }
+        if (!response.ok || !response.body) throw new Error(`Report dependency download failed: ${name}`);
+        const sha1 = crypto.createHash('sha1');
+        const sha512 = crypto.createHash('sha512');
+        for await (const chunk of response.body) {
+            sha1.update(chunk);
+            sha512.update(chunk);
+        }
+        if (`sha1-${sha1.digest('base64')}` !== pkg.integrity) {
+            throw new Error(`Report dependency checksum mismatch: ${name}`);
+        }
+        pkg.microhackSourceIntegrity = pkg.integrity;
+        pkg.integrity = `sha512-${sha512.digest('base64')}`;
+        changed = true;
+    }
+    if (changed) {
+        const temporary = `${path}.${crypto.randomUUID()}.tmp`;
+        try {
+            fs.writeFileSync(temporary, JSON.stringify(lock, null, 2) + '\n', {encoding: 'utf8', flag: 'wx'});
+            fs.renameSync(temporary, path);
+        } finally {
+            if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+        }
+    }
+}
+run().catch(error => { console.error(error.message); process.exitCode = 1; });
+'@
+    $null = Invoke-LabProfileCommand $NodeExecutable @('-e', $completeIntegrity, $Path)
 }
 
 function Assert-LabReportLock {

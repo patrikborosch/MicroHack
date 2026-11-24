@@ -54,6 +54,58 @@ try {
     Assert-Throws { Assert-LabReportLock $lockPath '1.3.0' $node } 'conflicts with the provisioning snapshot'
     [IO.File]::WriteAllText($lockPath, '{invalid', [Text.UTF8Encoding]::new($false))
     Assert-Throws { Assert-LabReportLock $lockPath '1.3.0' $node } 'Lab setup command failed'
+    & {
+        $invokeNative = ${function:Invoke-LabProfileCommand}
+        $script:downloadMode = 'valid'
+        function Invoke-LabProfileCommand([string]$Executable, [string[]]$Arguments) {
+            $fixtureFetch = @'
+global.fetch = async function(url) {
+    if (process.env.MICROHACK_TEST_DOWNLOAD === 'redirect') {
+        return {status:302, headers:{get:()=> 'http://example.test/unsafe'}, body:{cancel:async()=>{}}};
+    }
+    if (process.env.MICROHACK_TEST_DOWNLOAD === 'none') throw new Error('Unexpected download on frozen retry');
+    return {status:200, ok:true, body:(async function*(){yield Buffer.from('synthetic archive bytes');})()};
+};
+'@
+            $prior = $env:MICROHACK_TEST_DOWNLOAD
+            $env:MICROHACK_TEST_DOWNLOAD = $script:downloadMode
+            try { & $invokeNative $Executable @('-e', ($fixtureFetch + "`n" + $Arguments[1]), $Arguments[2]) }
+            finally { $env:MICROHACK_TEST_DOWNLOAD = $prior }
+        }
+        $bytes = [Text.Encoding]::UTF8.GetBytes('synthetic archive bytes')
+        $hash = [Security.Cryptography.SHA1]::Create()
+        try { $sha1 = 'sha1-' + [Convert]::ToBase64String($hash.ComputeHash($bytes)) }
+        finally { $hash.Dispose() }
+        $hash = [Security.Cryptography.SHA512]::Create()
+        try { $sha512 = 'sha512-' + [Convert]::ToBase64String($hash.ComputeHash($bytes)) }
+        finally { $hash.Dispose() }
+        $legacyLock = $lockFixture.Replace('sha512-fixture', $sha1)
+        [IO.File]::WriteAllText($lockPath, $legacyLock, [Text.UTF8Encoding]::new($false))
+        Complete-LabReportIntegrity $lockPath $node
+        $completed = Get-Content -LiteralPath $lockPath -Raw
+        Assert-True ($completed.Contains($sha512) -and $completed.Contains('"microhackSourceIntegrity"') -and
+            $completed.Contains($sha1)) 'Feed SHA1 is verified and retained, and actual archive bytes are frozen with SHA512'
+        Assert-LabReportLock $lockPath '1.3.0' $node
+        Assert-True $true 'Upgraded legacy feed lock passes the unchanged strong integrity validator'
+        $script:downloadMode = 'none'
+        Complete-LabReportIntegrity $lockPath $node
+        Assert-True ((Get-Content -LiteralPath $lockPath -Raw) -ceq $completed) 'Frozen SHA512 retry neither downloads nor rewrites the lock'
+        $script:downloadMode = 'valid'
+        foreach ($invalid in @(
+            $legacyLock.Replace($sha1, ('sha1-' + ('A' * 27) + '=')),
+            $legacyLock.Replace('https://example.test/dependency.tgz', 'http://example.test/dependency.tgz'),
+            $legacyLock.Replace($sha1, 'sha256-unsupported'),
+            $legacyLock.Replace(',"integrity":"' + $sha1 + '"', '')
+        )) {
+            [IO.File]::WriteAllText($lockPath, $invalid, [Text.UTF8Encoding]::new($false))
+            Assert-Throws { Complete-LabReportIntegrity $lockPath $node } 'Lab setup command failed'
+            Assert-True ((Get-Content -LiteralPath $lockPath -Raw) -ceq $invalid) 'Failed verification leaves the original lock untouched'
+        }
+        $script:downloadMode = 'redirect'
+        [IO.File]::WriteAllText($lockPath, $legacyLock, [Text.UTF8Encoding]::new($false))
+        Assert-Throws { Complete-LabReportIntegrity $lockPath $node } 'Lab setup command failed'
+        Assert-True ((Get-Content -LiteralPath $lockPath -Raw) -ceq $legacyLock) 'Insecure redirect is rejected without changing the lock'
+    }
     if ($Live) {
         $latest = Get-LabLatestPackages
         Assert-True ($latest.tools.Count -eq 7) 'All seven tools resolve from current official metadata'
@@ -112,6 +164,7 @@ try {
         $npmOptions = @('--ignore-scripts','--no-audit','--no-fund',"--prefix=$runtime",
             "--registry=$($latest.report.registry)","--cache=$scratch\npm-cache","--userconfig=$scratch\empty.npmrc")
         $null = Invoke-LabProfileCommand $npm (@('install','--package-lock-only') + $npmOptions)
+        Complete-LabReportIntegrity "$runtime\package-lock.json" $node
         Assert-LabReportLock "$runtime\package-lock.json" $latest.report.version $node
         Assert-True $true 'Actual bootstrap validation accepts the newly generated npm lock without skipping version or dependency integrity checks'
         $null = Invoke-LabProfileCommand $npm (@('ci') + $npmOptions)

@@ -125,8 +125,18 @@ are checked after installation. Python and portable tools live under
 
 The report runtime creates its exact dependency lock once under
 `C:\MicroHack\tools\report`, then uses `npm ci`, SHA512 integrity and disabled
-lifecycle scripts. Its lock is retained for retries and inspection. The checked-in
-[reference npm lock](npm-runtime/package-lock.json) describes the earlier locally
+lifecycle scripts. Its lock is retained for retries and inspection.
+Microsoft's public npm feed can return SHA1-only dependency metadata. During
+initial provisioning, those exact HTTPS archives are downloaded with bounded
+timeouts/redirects and verified against the feed's SHA1. Their actual bytes are
+then hashed with SHA512 and recorded atomically in the lock before `npm ci`.
+The original checksum is retained as `microhackSourceIntegrity`. This SHA512 is
+a locally computed first-acquisition hash, not a publisher-provided SHA512 or
+signature; HTTPS and the feed's original checksum establish that acquisition.
+Missing/unsupported checksums, mismatches and insecure redirects fail without
+rewriting the lock. Already-frozen SHA512 entries do not need this extra download.
+
+The checked-in [reference npm lock](npm-runtime/package-lock.json) describes the earlier locally
 exercised toolchain, not the dynamically resolved VM runtime. No employee npm
 credentials are required. New stable versions must still pass the event pilot;
 "latest" is not a compatibility or live-acceptance claim.

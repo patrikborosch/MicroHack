@@ -78,6 +78,12 @@ bootstrap report-lock validator runs against Node.js with an npm-style empty
 root-package key, version mismatches, missing/invalid dependency integrity,
 non-HTTPS dependencies, a missing report package and malformed JSON. The live
 smoke also invokes this validator on the newly generated npm lock.
+Legacy feed checksum fixtures run the actual Node.js conversion with offline
+download doubles: verified SHA1 bytes become SHA512, original checksums remain
+recorded, frozen retries do not download/rewrite, and checksum mismatches,
+missing/unsupported checksums, HTTP URLs and HTTPS-to-HTTP redirects preserve
+the unchanged original lock on failure. Live report-runtime smoke runs the same
+conversion before validation and `npm ci`.
 
 Optionally run `& "$hack\tests\test_fabric_setup.ps1" -Live` for official public
 release metadata, the real complete Fabric archive and actual local marketplace
