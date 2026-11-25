@@ -56,7 +56,7 @@ try {
     $defaults = Get-Content -LiteralPath "$lab\lab-defaults.json" -Raw
     Assert-True (Test-Json -Json $defaults -SchemaFile "$repo\lab-defaults-schema.json") 'Platform defaults schema'
     $defaultsObject = $defaults | ConvertFrom-Json
-    Assert-True (($defaultsObject.groups -join ',') -eq 'GHCPUsers,M365-E5-Users' -and $defaultsObject.Quality -eq 'Testing') 'Requested activation groups and Testing'
+    Assert-True (($defaultsObject.groups -join ',') -eq 'M365-E5-Users' -and $defaultsObject.Quality -eq 'Testing') 'Temporary fork activation groups and Testing; restore GHCPUsers before the upstream PR per CONTRIBUTING.md'
     $sub = '11111111-1111-1111-1111-111111111111'
     $user = '22222222-2222-2222-2222-222222222222'
     $admin = '33333333-3333-3333-3333-333333333333'

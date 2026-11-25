@@ -3,6 +3,13 @@
 These are future contributor actions, **not publication authorization**.
 Follow the [upstream contribution policy](../../../CONTRIBUTING.md).
 
+**Before opening the next PR to `microsoft/MicroHack` main:** restore `GHCPUsers`
+alongside `M365-E5-Users` in `labautomation\lab-defaults.json` and update the
+matching activation-group assertion in `tests\test_automation.ps1`. Its removal
+is temporary for fork-based testing, not the intended upstream licensing default.
+During this temporary state, participants still need an independently available
+GitHub Copilot entitlement; the content pack does not request one.
+
 1. Search proposals, then discuss a new MicroHack in an upstream proposal issue
    using its template when publication is authorized. Include public-safe scope,
    prerequisites and evidence, not private workshop documents or URLs. Confirm the
