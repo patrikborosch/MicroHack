@@ -20,7 +20,8 @@ The platform supplies authenticated, isolated Az/CLI contexts and helpers:
 
 The participant hook supports `resourcegroup` only, and uses the existing
 platform-created RG. It does not authenticate, switch subscription, create users,
-buy/assign licenses or grant participants capacity administration. The platform
+buy/assign licenses. The shared hook grants capacity administration as described
+below. The platform
 grants subscription Reader and participant-RG Owner; this exposes shared Azure
 metadata but is not access to other participants' VM credentials or Fabric data.
 
@@ -46,47 +47,46 @@ waited on without another registration request. Denied or incomplete registratio
 stops deployment explicitly; no missing-provider error is silently ignored.
 An RG's metadata location need not equal its resources' region.
 
-The shared capacity administrator is the **deployment principal's object ID**,
+The shared capacity administrators include the **deployment principal's object ID**,
 read from its existing ARM token's `oid` claim without Graph lookup or token
-output. Participant IDs are rejected as capacity administrators. An authorized
-Fabric administrator must still arrange workspace assignment permissions and
-governance; ARM ownership does not imply Fabric workspace access.
+output, plus **every participant assigned to that subscription**. As in the
+neighboring Talk to your data lab, `Get-MhhLabUser` resolves the platform's
+participant IDs to individual user principal names, which are passed to
+`administration.members` in the shared capacity template. Groups and users from
+other subscription rosters are not added. Missing, mismatched or duplicate user
+records stop deployment rather than silently omitting access.
 
 ### Enable participant workspace assignment after capacity provisioning
 
-An authorized capacity administrator must configure **Fabric capacity Contributor
-permissions**, not Azure IAM Contributor. Keep subscription Reader and
-participant-RG Owner unchanged. Azure Reader does not grant Fabric assignment
-rights; Azure Contributor would grant infrastructure management rather than the
-intended workspace-assignment permission.
-
-After the shared F16 is Active, and before admitting participants:
-
-1. Sign into the lab tenant's Fabric portal as an authorized capacity administrator.
-2. Open **Settings > Admin portal > Capacity settings > Fabric capacity**.
-3. Select the exact shared capacity name returned by `shared-deploy-lab.ps1`.
-4. Under **Details > Contributor permissions**, select **Specific users or
-   security groups** and add the assigned lab users for that subscription, or an
-   organizer-managed security group containing exactly those users.
-5. Select **Apply**. Do not choose the entire organization or add participants
-   under **Admin permissions**.
-6. Have the Fabric tenant administrator verify that **Create workspaces** permits
-   those identities. Confirm the participants have the required authoring
-   entitlement and API consent.
+The user-directed lab access policy now grants **Fabric capacity Admin** during
+shared deployment, replacing the manual capacity Contributor allow-list step.
+This is deliberately broader than Contributor: participants can manage shared
+capacity settings and permissions and affect other participants' workloads.
+It is not a tenant Fabric Administrator or Azure IAM Contributor assignment.
+Keep subscription Reader and participant-RG Owner unchanged.
 
 A participant creates their own workspace in Challenge 1 and is its workspace
-Admin. Together with capacity Contributor, this permits assignment to the F16.
+Admin. Together with capacity Admin, this permits assignment to the F16.
+The Fabric tenant administrator must still verify that **Create workspaces**
+permits the lab identities and that authoring entitlement and API consent exist.
 For REST assignment, the delegated scopes are `Capacity.ReadWrite.All` and
 `Workspace.ReadWrite.All`; Azure CLI/MCP authentication must use the assigned lab
 Entra identity. Record an actual successful assignment in the pilot, not merely
 an Azure role assignment or a visible capacity name.
 
-This is an explicit organizer step, **not an automated grant by these hooks**.
-The deployed ARM API exposes `administration.members` for capacity administrators,
-not this contributor allow-list. No undocumented Fabric endpoint or capacity-admin
-substitute is used. Apply this setting to the existing successfully deployed
-capacity; it does not require resetting/rebuilding participant VMs. Repeat it for
-each newly created subscription capacity.
+For an existing deployment with the same roster/settings/deployment principal,
+rerunning the updated **shared hook** updates capacity administrators in place.
+The permission-only change retains the existing shared ownership fingerprint
+and does not change the guest payload or participant VM fingerprints; no VM
+rebuild is required. Other configuration/roster collisions still stop deployment.
+The template's administrator list is authoritative on rerun: separately added
+administrators not in that list are not preserved. No live update occurs merely
+by changing these source files.
+
+Capacity administration is not a participant-isolation boundary. Do not change
+shared settings or permissions during the exercises. Reassess ItemCreation policy
+enforcement and the original no-participant-capacity-admin condition in AC-10;
+this permission change is not evidence that either acceptance gate passed.
 
 References: [capacity Contributor permissions](https://learn.microsoft.com/en-us/fabric/admin/capacity-settings#details),
 [tenant settings](https://learn.microsoft.com/en-us/fabric/admin/tenant-settings-index),

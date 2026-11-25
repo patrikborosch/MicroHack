@@ -9,8 +9,8 @@ Before delivery, record private evidence for:
 
 - Enabled Power BI author service plans and seat stock for each identity, plus
   Copilot seats, permitted models and usage budget. F16 alone is not a license.
-- Fabric **capacity Contributor** permissions for the assigned lab users or their
-  scoped security group, configured by a capacity administrator after F16 creation.
+- Fabric **capacity Admin** permissions for every assigned participant, configured
+  by shared deployment alongside the deployment principal.
   Follow the [capacity permission setup](README.md#enable-participant-workspace-assignment-after-capacity-provisioning).
   Azure subscription Reader is unchanged; Azure IAM Contributor is not a substitute.
   Confirm the tenant's Create workspaces setting includes those identities and
@@ -19,8 +19,12 @@ Before delivery, record private evidence for:
   `Capacity.ReadWrite.All` and `Workspace.ReadWrite.All` delegated scopes.
 - Supported ItemCreation
   policies for Lakehouse, Notebook, SemanticModel and Report. Verify the managed
-  SQL endpoint dependency and coverage for new workspaces. Do not grant capacity
-  admin to participants or pretend instructions enforce allowed types.
+  SQL endpoint dependency and coverage for new workspaces. Do not grant
+  additional tenant administration to participants or pretend instructions
+  enforce allowed types. Capacity admins can change shared settings/permissions;
+  reassess policy tampering and cross-participant disruption under this broader
+  user-directed access policy. AC-10's original no-capacity-admin condition is
+  explicitly superseded, not passed.
 - Region/VM SKU availability, quotas and Azure Policy, Windows Server license
   inclusion, outbound download hosts and working browser Bastion connections.
   Windows client images/Hybrid Benefit are not enabled by these defaults.

@@ -64,8 +64,9 @@ missing packages, change tenant settings or update the event image yourself.
 
 Confirm your supplied capacity ID, workspace alias, workspace-creation and
 capacity-assignment permissions, and enabled authoring entitlement. **F16 alone
-does not supply a Power BI authoring license.** Do not grant yourself capacity
-administration or create a capacity, identity or license.
+does not supply a Power BI authoring license.** Shared deployment grants your
+assigned lab identity capacity Admin. Do not change shared capacity settings or
+permissions, or create a capacity, identity or license.
 
 Read the [banking](banking-business-brief.md) or
 [insurance](insurance-business-brief.md) brief and the

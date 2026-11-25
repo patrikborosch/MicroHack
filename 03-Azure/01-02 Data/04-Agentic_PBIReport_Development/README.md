@@ -31,8 +31,11 @@ Organizer: complete [provisioning and release gates](labautomation/README.md)
 before admitting participants. Each participant needs a separate Windows VM,
 identity, resource group and workspace, valid Power BI authoring entitlement, a
 GitHub Copilot seat and an approved available model. Shared F16 compute does not
-provide an author license or isolate workspaces. Do not grant capacity admin to
-participants. Workspace creation/assignment permissions must be preflighted.
+provide an author license or isolate workspaces. Shared deployment grants every
+assigned participant capacity Admin, matching the neighboring lab. This permits
+shared-capacity administration, not just workspace assignment; participants must
+not change shared settings during the exercise. Workspace creation/assignment
+permissions and the revised isolation assumptions must be preflighted.
 VMs are private, reached through shared Azure Bastion; deployment hooks use
 platform inputs and checked-in nonsecret settings, not a private config mount.
 

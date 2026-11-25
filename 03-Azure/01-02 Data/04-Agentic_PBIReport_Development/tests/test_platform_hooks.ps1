@@ -32,6 +32,7 @@ $sub = '11111111-1111-1111-1111-111111111111'
 $user = '22222222-2222-2222-2222-222222222222'
 $user2 = '44444444-4444-4444-4444-444444444444'
 $script:administrator = '33333333-3333-3333-3333-333333333333'
+$script:userResolution = 'valid'
 $script:contextSubscription = $sub
 $script:groups = @{}
 $script:resources = @{}
@@ -70,6 +71,17 @@ function New-MhhStablePassword {
     param([string]$Purpose, [int]$Length, [switch]$AsSecureString)
     if ($AsSecureString) { return ConvertTo-SecureString 'Offline-Fixture-Only-1!' -AsPlainText -Force }
     return 'Offline-Fixture-Only-1!'
+}
+function Get-MhhLabUser {
+    [CmdletBinding()]param([string]$UserId)
+    if ($script:userResolution -eq 'missing') { return }
+    if ($UserId -notin @($user, $user2)) { throw 'Unassigned participant lookup.' }
+    [pscustomobject]@{
+        Id = if ($script:userResolution -eq 'wrong-id') { $script:administrator } else { $UserId }
+        UserPrincipalName = if ($script:userResolution -eq 'invalid-upn') { '' }
+            elseif ($script:userResolution -eq 'duplicate' -or $UserId -eq $user) { 'participant-a@example.test' }
+            else { 'participant-b@example.test' }
+    }
 }
 function Get-AzContext {
     [CmdletBinding()]param()
@@ -168,7 +180,9 @@ function New-AzResourceGroupDeployment {
     $script:deployments += @{name=$Name; parameters=$p}
     $prefix="/subscriptions/$sub/resourceGroups/$ResourceGroupName/providers"
     if ($Name -eq 'apbi-shared') {
-        Assert-True ($p.capacityAdministrators.Count -eq 1 -and $p.capacityAdministrators[0] -eq $script:administrator) 'Only deployment principal administers capacity'
+        Assert-True ($p.capacityAdministrators.Count -eq 3 -and $p.capacityAdministrators[0] -eq $script:administrator -and
+            $p.capacityAdministrators[1] -eq 'participant-a@example.test' -and
+            $p.capacityAdministrators[2] -eq 'participant-b@example.test') 'Deployment principal plus exactly this subscription roster administer the capacity in stable order'
         foreach ($kind in @(
             @{type='Microsoft.Fabric/capacities';name=$p.capacityName},
             @{type='Microsoft.Network/virtualNetworks';name="vnet-$($p.suffix)"}
@@ -225,6 +239,11 @@ try {
     $sharedArgs=@{SubscriptionId=$sub;PreferredLocation=@('unsupportedregion',$defaults.preferredLocation);AllowedEntraUserIds=@($user2,$user)}
     $sharedOutput = @(. "$lab\shared-deploy-lab.ps1" @sharedArgs)
     Assert-True ($sharedOutput.Count -eq 2) 'Shared hook completes using exactly the supported platform contract'
+    $priorFingerprint = Get-LabFingerprint @{
+        settings = (Read-LabSettings); administrator = $script:administrator; users = @($user, $user2)
+    }
+    Assert-True ($script:deployments[0].parameters.tags.LabConfig -eq $priorFingerprint) 'Permission-only rollout retains the previous shared ownership fingerprint for in-place updates'
+    Assert-True ($sharedOutput[0].HackboxCredential.note -match 'capacity administrator') 'Participant capacity credential describes the broader administrative permission'
     Assert-True ($script:skuReads -eq 2 -and $script:sleeps -eq 3) 'Registration, F16 metadata pagination and Active readiness waits are exercised'
     Assert-True (($script:registrationRequests -join ',') -eq 'Microsoft.Fabric' -and $script:providerState -eq 'Registered') 'Missing Fabric provider is registered once and awaited before metadata/deployment'
     Assert-True ($script:deployments[0].parameters.location -eq 'switzerlandnorth') 'Platform defaults actually deploy shared infrastructure in Switzerland North'
@@ -255,6 +274,11 @@ try {
     $script:administrator=$user
     Assert-Throws { . "$lab\shared-deploy-lab.ps1" @sharedArgs } 'nonparticipant capacity administrator'
     $script:administrator='33333333-3333-3333-3333-333333333333'
+    foreach ($mode in 'missing', 'wrong-id', 'invalid-upn', 'duplicate') {
+        $script:userResolution = $mode
+        Assert-Throws { . "$lab\shared-deploy-lab.ps1" @sharedArgs } 'participant.*capacity-administrator user identit'
+    }
+    $script:userResolution = 'valid'
     Assert-Throws { . "$lab\deploy-lab.ps1" -DeploymentType subscription -SubscriptionId $sub } 'Only the resourcegroup'
     Assert-Throws { . "$lab\deploy-lab.ps1" -DeploymentType resourcegroup -SubscriptionId $sub -AllowedEntraUserIds @($user,$user2) } 'Exactly one'
     Assert-True ($script:deployments.Count -eq $before) 'Invalid inputs cause no deployment'

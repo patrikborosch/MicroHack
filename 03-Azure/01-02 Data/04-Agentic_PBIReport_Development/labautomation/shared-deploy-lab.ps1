@@ -14,13 +14,30 @@ Set-StrictMode -Version Latest
 Write-Host "[lab] Shared preflight: subscription=$SubscriptionId; participants=$($AllowedEntraUserIds.Count)"
 $runtime = Get-LabPlatformContext $SubscriptionId $PreferredLocation $AllowedEntraUserIds
 $settings = $runtime.Settings
-if (-not (Get-Command Get-MhhStableHash -ErrorAction SilentlyContinue)) { throw 'Required platform helper unavailable: Get-MhhStableHash' }
+foreach ($helper in 'Get-MhhStableHash', 'Get-MhhLabUser') {
+    if (-not (Get-Command $helper -ErrorAction SilentlyContinue)) { throw "Required platform helper unavailable: $helper" }
+}
 $suffix = Get-MhhStableHash -Value @($SubscriptionId) -Length 12
 $resourceGroup = "rg-apbi-shared-$suffix"
 $capacityName = "apbi$suffix"
 $administrator = Get-LabCapacityAdministrator $AllowedEntraUserIds
 $users = @($AllowedEntraUserIds | Sort-Object)
 if ($users.Count -gt 1000) { throw 'The subnet address plan supports at most 1000 identities; this is not a measured F16 cohort limit.' }
+$participantAdministrators = @(
+    foreach ($userId in $users) {
+        $labUser = @(Get-MhhLabUser -UserId $userId -ErrorAction Stop)
+        if ($labUser.Count -ne 1 -or $labUser[0].Id -ne $userId -or
+            [string]$labUser[0].UserPrincipalName -notmatch '^[^@\s]+@[^@\s]+$') {
+            throw 'Cannot resolve an assigned participant to a capacity-administrator user identity.'
+        }
+        [string]$labUser[0].UserPrincipalName
+    }
+)
+if (@($participantAdministrators | Select-Object -Unique).Count -ne $users.Count) {
+    throw 'Assigned participants resolved to duplicate capacity-administrator user identities.'
+}
+$capacityAdministrators = @($administrator) + $participantAdministrators
+# Permission-only rollout: retain ownership fingerprints for the unchanged roster and guest configuration.
 $fingerprint = Get-LabFingerprint @{ settings = $settings; administrator = $administrator; users = $users }
 $existing = @(Invoke-LabAzureOperation { Get-AzResourceGroup -ErrorAction Stop } 'Read shared resource group' |
     Where-Object ResourceGroupName -EQ $resourceGroup)
@@ -51,7 +68,7 @@ try {
         New-AzResourceGroupDeployment -Name 'apbi-shared' -ResourceGroupName $resourceGroup `
             -TemplateFile (Join-Path $PSScriptRoot 'shared.bicep') -TemplateParameterObject @{
                 location = $region; capacityName = $capacityName; suffix = $suffix
-                capacityAdministrators = @($administrator); tags = $tags
+                capacityAdministrators = $capacityAdministrators; tags = $tags
                 participantSubnets = @(
                     for ($i = 0; $i -lt $users.Count; $i++) {
                         $block = $i + 1
@@ -84,6 +101,6 @@ for ($attempt = 0; $attempt -lt 60; $attempt++) {
 }
 if (-not $active) { throw 'Shared capacity did not become Active within five minutes; participant fan-out must not start.' }
 Write-Warning 'Infrastructure provisioned only. Organizers must verify Fabric assignment permissions, ItemCreation policy coverage, licenses and both host journeys before participant admission.'
-Write-Warning "Fabric permission setup required for ${capacityName}: an authorized capacity administrator must add this subscription's lab users under Fabric Admin portal > Capacity settings > Fabric capacity > Details > Contributor permissions > Specific users or security groups. This hook does not grant it. Azure IAM Contributor is not a substitute; keep participant capacity administration disabled."
-@{ HackboxCredential = @{ name = 'Shared capacity'; value = $capacityName; note = "F16 in $resourceGroup. No participant capacity-administrator grants. Create your workspace with Copilot in Challenge 1." } }
+Write-Warning "All $($users.Count) assigned participants are configured as administrators of ${capacityName}, alongside the deployment principal. They can change shared capacity settings and disrupt other participants; this is not a least-privilege capacity Contributor grant. Workspace creation tenant settings, licensing and live Fabric assignment still require verification."
+@{ HackboxCredential = @{ name = 'Shared capacity'; value = $capacityName; note = "F16 in $resourceGroup. You are a capacity administrator; do not change shared capacity settings during the exercise. Create your workspace with Copilot in Challenge 1." } }
 @{ HackboxCredential = @{ name = 'Shared Bastion'; value = "bastion-$suffix"; note = 'Browser RDP to private participant VMs. Shared NAT, Bastion and public endpoint charges are additional to F16.' } }

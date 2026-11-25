@@ -12,10 +12,12 @@ are allowed within the same permissions.
 At Challenge 1 start, have Copilot create a workspace using the supported Fabric
 workspace API, resolve its returned ID, then assign the organizer-provided F16
 with the documented `assignToCapacity` operation. The administrator must have
-preflighted tenant workspace creation and capacity-assignment rights without
-giving participants capacity administration. Read back workspace capacityId.
+preflighted tenant workspace creation and capacity-assignment rights. Shared
+deployment grants participants capacity Admin under the user-directed lab policy.
+Read back workspace capacityId.
 On retry, use the saved actual workspace ID; stop on ambiguous name-only matches.
-The creator administers **their workspace**, not shared compute.
+The creator administers **their workspace**. Although the lab also grants capacity
+Admin, do not change shared compute settings or permissions during this exercise.
 
 Create a schema-enabled Lakehouse (`Lakehouse` type), inspect the actual `dbo`
 table namespace and managed SQL analytics endpoint, and record its ID privately.

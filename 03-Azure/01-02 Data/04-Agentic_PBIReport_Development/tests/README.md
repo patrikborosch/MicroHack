@@ -30,6 +30,9 @@ normal Windows path-length limit.
 
 `test_platform_hooks.ps1` runs both actual hook scripts with Azure/platform
 boundary doubles and `MHH_EVENT_CONFIG` absent. It exercises shared provisioning,
+including the deployment principal plus every subscription participant's resolved
+UPN in the capacity administrator list, stable reruns and rejection of missing,
+mismatched, invalid or duplicate participant records before deployment,
 ordered region selection, retained exact image versions, two participant VMs,
 stable retries, secure password parameters, complete guest payload construction,
 RG metadata-region differences, preserved platform tags and explicit rejection
